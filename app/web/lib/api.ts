@@ -23,6 +23,8 @@ export type Project = {
   id: string;
   title: string;
   brief: Brief;
+  series_id: string | null;
+  episode_spec: EpisodeSpec | null;
   pipeline: PipelineStage[];
   created_at: string;
   updated_at: string;
@@ -49,10 +51,129 @@ export type StageApproval = {
 };
 
 export type ProjectNextAction = {
-  action_type: "approve" | "run" | "done";
+  action_type:
+    | "approve"
+    | "run"
+    | "done"
+    | "define_series"
+    | "complete_episode_spec"
+    | "approve_episode_spec"
+    | "run_anti_repetition_check"
+    | "fix_rejected_stage"
+    | "fix_repetition_risk"
+    | "complete_publish_package"
+    | "enter_performance_metrics";
   stage: string | null;
   label: string;
   message: string;
+  severity: "info" | "warning" | "blocker";
+};
+
+export type StageCatalogItem = {
+  stage: string;
+  label: string;
+  display_name: string;
+  future_stage: string;
+  description: string;
+};
+
+export type SeriesCharacter = {
+  name: string;
+  role: string;
+  visual_description: string;
+  personality: string;
+  voice_notes: string;
+};
+
+export type SeriesBibleInput = {
+  name: string;
+  status?: "draft" | "active" | "archived";
+  target_age_min: number;
+  target_age_max: number;
+  primary_language: string;
+  secondary_language?: string | null;
+  learning_domain: string;
+  series_premise: string;
+  main_characters: SeriesCharacter[];
+  visual_style: string;
+  music_style: string;
+  voice_rules: string;
+  safety_rules: string[];
+  forbidden_content: string[];
+  thumbnail_rules?: string;
+  made_for_kids_default: boolean;
+};
+
+export type SeriesBible = SeriesBibleInput & {
+  id: string;
+  status: "draft" | "active" | "archived";
+  created_at: string;
+  updated_at: string;
+};
+
+export type LearningObjective = {
+  statement: string;
+  domain: string;
+  vocabulary_terms: string[];
+  success_criteria: string[];
+};
+
+export type DerivativePlan = {
+  make_shorts: boolean;
+  make_reels: boolean;
+  make_parent_teacher_page: boolean;
+  make_lyrics_page: boolean;
+};
+
+export type EpisodeSpecInput = {
+  working_title: string;
+  topic: string;
+  target_age_min?: number | null;
+  target_age_max?: number | null;
+  learning_objective: LearningObjective;
+  format: "song_video" | "short" | "compilation_seed" | "lesson_clip";
+  target_duration_sec: number;
+  audience_context: "home" | "classroom" | "both";
+  search_keywords: string[];
+  hook_idea?: string;
+  derivative_plan: DerivativePlan;
+  made_for_kids: boolean;
+  risk_notes?: string;
+};
+
+export type EpisodeSpec = EpisodeSpecInput & {
+  project_id: string;
+  series_id: string | null;
+  approval_status: "draft" | "approved" | "needs_changes";
+  approved_at: string | null;
+  approved_by: string | null;
+  approval_note: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AntiRepetitionReport = {
+  id: string;
+  project_id: string;
+  series_id: string | null;
+  status: "ok" | "warning" | "review_recommended" | "blocker";
+  score: number;
+  compared_projects_count: number;
+  closest_matches: {
+    project_id: string;
+    title: string;
+    score: number;
+    reasons: string[];
+  }[];
+  signals: {
+    title_similarity: number | null;
+    topic_similarity: number | null;
+    objective_similarity: number | null;
+    vocabulary_overlap: number | null;
+    lyrics_similarity: number | null;
+    storyboard_similarity: number | null;
+  };
+  generated_at: string;
 };
 
 export type ServerConnection = {
@@ -251,6 +372,52 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchProjects() {
   return request<Project[]>("/api/projects");
+}
+
+export function fetchStageCatalog() {
+  return request<StageCatalogItem[]>("/api/stages/catalog");
+}
+
+export function fetchSeries() {
+  return request<SeriesBible[]>("/api/series");
+}
+
+export function createSeries(input: SeriesBibleInput) {
+  return request<SeriesBible>("/api/series", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function linkProjectSeries(projectId: string, seriesId: string) {
+  return request<Project>(`/api/projects/${projectId}/series`, {
+    method: "PUT",
+    body: JSON.stringify({ series_id: seriesId })
+  });
+}
+
+export function saveEpisodeSpec(projectId: string, input: EpisodeSpecInput) {
+  return request<EpisodeSpec>(`/api/projects/${projectId}/episode-spec`, {
+    method: "PUT",
+    body: JSON.stringify(input)
+  });
+}
+
+export function approveEpisodeSpec(projectId: string, note = "") {
+  return request<Project>(`/api/projects/${projectId}/episode-spec/approve`, {
+    method: "POST",
+    body: JSON.stringify({ note })
+  });
+}
+
+export function fetchAntiRepetitionReport(projectId: string) {
+  return request<AntiRepetitionReport>(`/api/projects/${projectId}/anti-repetition`);
+}
+
+export function runAntiRepetition(projectId: string) {
+  return request<AntiRepetitionReport>(`/api/projects/${projectId}/anti-repetition/run`, {
+    method: "POST"
+  });
 }
 
 export function fetchProjectJobs(projectId: string) {

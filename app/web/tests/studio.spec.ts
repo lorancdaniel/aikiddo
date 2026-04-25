@@ -25,6 +25,28 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await page.getByRole("button", { name: "Utwórz projekt" }).click();
 
   await expect(page.getByTestId("selected-project-title")).toContainText("Szczoteczka bohater");
+  await expect(page.getByTestId("content-strategy")).toContainText("Content Strategy");
+  await expect(page.getByTestId("next-action")).toContainText("Wybierz albo utwórz Series Bible");
+  await page.getByLabel("Nazwa serii").fill("Healthy Habits Songs");
+  await page.getByLabel("Domena nauki").fill("health routines");
+  await page.getByLabel("Założenie serii").fill("Short songs for preschool daily routines.");
+  await page.getByLabel("Styl wizualny serii").fill("bright 2D bathroom and classroom scenes");
+  await page.getByLabel("Styl muzyczny serii").fill("upbeat call-and-response");
+  await page.getByLabel("Reguły głosu").fill("clear pronunciation, gentle pace");
+  await page.getByLabel("Zasady bezpieczeństwa").fill("no unsafe actions, no fear pressure");
+  await page.getByLabel("Zakazane treści").fill("violence, brand mascots");
+  await page.getByRole("button", { name: "Zapisz serię" }).click();
+  await expect(page.getByTestId("next-action")).toContainText("Uzupełnij Episode Spec");
+  await page.getByLabel("Roboczy tytuł").fill("Toothbrush Morning Song");
+  await page.getByLabel("Learning objective").fill("Dziecko 3-5 lat pamięta dwa kroki porannego mycia zębów.");
+  await page.getByLabel("Słownictwo").fill("brush, teeth, morning");
+  await page.getByLabel("Słowa kluczowe").fill("toothbrush song, brushing teeth kids");
+  await page.getByRole("button", { name: "Zapisz Episode Spec" }).click();
+  await expect(page.getByTestId("next-action")).toContainText("Episode Spec czeka na akceptację operatora.");
+  await page.getByRole("button", { name: "Zatwierdź Episode Spec" }).click();
+  await expect(page.getByTestId("next-action")).toContainText("Uruchom Anti-Repetition check");
+  await page.getByRole("button", { name: "Uruchom Anti-Repetition" }).click();
+  await expect(page.getByTestId("repetition-risk")).toContainText("ok");
   await expect(page.getByTestId("next-action")).toContainText("Brief czeka na akceptację operatora.");
   await expect(page.getByTestId("run-lyrics-button")).toBeDisabled();
   await page.getByTestId("approve-brief.generate").click();

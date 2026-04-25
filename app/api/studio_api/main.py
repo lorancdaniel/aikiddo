@@ -4,11 +4,15 @@ import os
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from .anti_repetition import build_anti_repetition_report
 from .mock_server import MockGpuServer
 from .models import (
+    AntiRepetitionReport,
     ArtifactInventoryItem,
     BriefInput,
     ComplianceReportArtifact,
+    EpisodeSpec,
+    EpisodeSpecInput,
     FullEpisodeArtifact,
     Job,
     KeyframesArtifact,
@@ -16,13 +20,18 @@ from .models import (
     PIPELINE_STAGES,
     Project,
     ProjectNextAction,
+    ProjectSeriesLinkInput,
     PublishPackageArtifact,
     ReelsArtifact,
     ServerProfile,
     ServerProfileInput,
+    STAGE_DISPLAY_CATALOG,
     STAGE_LABELS,
+    SeriesBible,
+    SeriesBibleInput,
     StageApproval,
     StageApprovalInput,
+    StageCatalogItem,
     StageStatus,
     StoryboardArtifact,
     VideoScenesArtifact,
@@ -32,7 +41,52 @@ from .models import (
 from .storage import ProjectStorage
 
 
-def get_project_next_action(project: Project) -> ProjectNextAction:
+def get_project_next_action(project: Project, anti_repetition_report: AntiRepetitionReport | None = None) -> ProjectNextAction:
+    if project.series_id is None:
+        return ProjectNextAction(
+            action_type="define_series",
+            stage=None,
+            label="Series Bible",
+            message="Wybierz albo utwórz Series Bible zanim uruchomisz produkcję.",
+            severity="blocker",
+        )
+
+    if project.episode_spec is None or not project.episode_spec.learning_objective.statement.strip():
+        return ProjectNextAction(
+            action_type="complete_episode_spec",
+            stage=None,
+            label="Episode Spec",
+            message="Uzupełnij Episode Spec i konkretny learning objective.",
+            severity="blocker",
+        )
+
+    if project.episode_spec.approval_status != "approved":
+        return ProjectNextAction(
+            action_type="approve_episode_spec",
+            stage=None,
+            label="Episode Spec",
+            message="Episode Spec czeka na akceptację operatora.",
+            severity="blocker",
+        )
+
+    if anti_repetition_report is None:
+        return ProjectNextAction(
+            action_type="run_anti_repetition_check",
+            stage=None,
+            label="Anti-Repetition",
+            message="Uruchom Anti-Repetition check przed produkcją.",
+            severity="warning",
+        )
+
+    if anti_repetition_report.status in {"blocker", "review_recommended"}:
+        return ProjectNextAction(
+            action_type="fix_repetition_risk",
+            stage=None,
+            label="Anti-Repetition",
+            message=f"Projekt jest zbyt podobny do wcześniejszych materiałów w serii ({anti_repetition_report.score:.2f}).",
+            severity="blocker" if anti_repetition_report.status == "blocker" else "warning",
+        )
+
     review_stage = next((stage for stage in project.pipeline if stage.status == StageStatus.NEEDS_REVIEW), None)
     if review_stage is not None:
         label = STAGE_LABELS.get(review_stage.stage, review_stage.stage)
@@ -41,6 +95,7 @@ def get_project_next_action(project: Project) -> ProjectNextAction:
             stage=review_stage.stage,
             label=label,
             message=f"{label} czeka na akceptację operatora.",
+            severity="info",
         )
 
     runnable_stage = next((stage for stage in project.pipeline if stage.status == StageStatus.PENDING), None)
@@ -51,6 +106,7 @@ def get_project_next_action(project: Project) -> ProjectNextAction:
             stage=runnable_stage.stage,
             label=label,
             message=f"Możesz uruchomić etap {label}.",
+            severity="info",
         )
 
     return ProjectNextAction(
@@ -58,6 +114,7 @@ def get_project_next_action(project: Project) -> ProjectNextAction:
         stage=None,
         label="Pipeline",
         message="Pipeline mock jest domknięty.",
+        severity="info",
     )
 
 
@@ -91,6 +148,46 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
     def list_projects() -> list[Project]:
         return storage.list_projects()
 
+    @app.get("/api/stages/catalog", response_model=list[StageCatalogItem])
+    def list_stage_catalog() -> list[StageCatalogItem]:
+        return [
+            StageCatalogItem(
+                stage=stage,
+                label=STAGE_LABELS.get(stage, stage),
+                display_name=STAGE_DISPLAY_CATALOG[stage]["display_name"],
+                future_stage=STAGE_DISPLAY_CATALOG[stage]["future_stage"],
+                description=STAGE_DISPLAY_CATALOG[stage]["description"],
+            )
+            for stage in PIPELINE_STAGES
+        ]
+
+    @app.get("/api/series", response_model=list[SeriesBible])
+    def list_series() -> list[SeriesBible]:
+        return storage.list_series()
+
+    @app.post("/api/series", response_model=SeriesBible, status_code=status.HTTP_201_CREATED)
+    def create_series(series_input: SeriesBibleInput) -> SeriesBible:
+        if series_input.target_age_min > series_input.target_age_max:
+            raise HTTPException(status_code=422, detail="target_age_min must be less than or equal to target_age_max")
+        return storage.create_series(series_input)
+
+    @app.get("/api/series/{series_id}", response_model=SeriesBible)
+    def get_series(series_id: str) -> SeriesBible:
+        series = storage.get_series(series_id)
+        if series is None:
+            raise HTTPException(status_code=404, detail="Series not found")
+        return series
+
+    @app.put("/api/series/{series_id}", response_model=SeriesBible)
+    def update_series(series_id: str, series_input: SeriesBibleInput) -> SeriesBible:
+        existing = storage.get_series(series_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Series not found")
+        if series_input.target_age_min > series_input.target_age_max:
+            raise HTTPException(status_code=422, detail="target_age_min must be less than or equal to target_age_max")
+        series = SeriesBible(id=series_id, created_at=existing.created_at, updated_at=utc_now(), **series_input.model_dump())
+        return storage.save_series(series)
+
     @app.post("/api/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
     def create_project(brief_input: BriefInput) -> Project:
         project = create_project_from_brief(brief_input)
@@ -102,6 +199,69 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return project
+
+    @app.put("/api/projects/{project_id}/series", response_model=Project)
+    def link_project_series(project_id: str, link_input: ProjectSeriesLinkInput) -> Project:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        series = storage.get_series(link_input.series_id)
+        if series is None:
+            raise HTTPException(status_code=404, detail="Series not found")
+        project.series_id = series.id
+        if project.episode_spec is not None:
+            project.episode_spec.series_id = series.id
+            project.episode_spec.updated_at = utc_now()
+        return storage.save_project(project)
+
+    @app.get("/api/projects/{project_id}/episode-spec", response_model=EpisodeSpec)
+    def get_episode_spec(project_id: str) -> EpisodeSpec:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if project.episode_spec is None:
+            raise HTTPException(status_code=404, detail="Episode spec not found")
+        return project.episode_spec
+
+    @app.put("/api/projects/{project_id}/episode-spec", response_model=EpisodeSpec)
+    def save_episode_spec(project_id: str, spec_input: EpisodeSpecInput) -> EpisodeSpec:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if spec_input.target_age_min is not None and spec_input.target_age_max is not None:
+            if spec_input.target_age_min > spec_input.target_age_max:
+                raise HTTPException(status_code=422, detail="target_age_min must be less than or equal to target_age_max")
+        now = utc_now()
+        created_at = project.episode_spec.created_at if project.episode_spec is not None else now
+        spec = EpisodeSpec(
+            project_id=project_id,
+            series_id=project.series_id,
+            approval_status="draft",
+            approved_at=None,
+            approved_by=None,
+            approval_note="",
+            created_at=created_at,
+            updated_at=now,
+            **spec_input.model_dump(),
+        )
+        project.episode_spec = spec
+        storage.save_project(project)
+        return spec
+
+    @app.post("/api/projects/{project_id}/episode-spec/approve", response_model=Project)
+    def approve_episode_spec(project_id: str, approval_input: StageApprovalInput) -> Project:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if project.episode_spec is None:
+            raise HTTPException(status_code=404, detail="Episode spec not found")
+        now = utc_now()
+        project.episode_spec.approval_status = "approved"
+        project.episode_spec.approved_at = now
+        project.episode_spec.approved_by = "operator"
+        project.episode_spec.approval_note = approval_input.note
+        project.episode_spec.updated_at = now
+        return storage.save_project(project)
 
     @app.get("/api/projects/{project_id}/jobs", response_model=list[Job])
     def list_project_jobs(project_id: str) -> list[Job]:
@@ -117,12 +277,47 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return storage.list_stage_approvals(project_id)
 
+    @app.get("/api/projects/{project_id}/anti-repetition", response_model=AntiRepetitionReport)
+    def get_anti_repetition_report(project_id: str) -> AntiRepetitionReport:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        report = storage.get_anti_repetition_report(project_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Anti-repetition report not found")
+        return report
+
+    @app.post("/api/projects/{project_id}/anti-repetition/run", response_model=AntiRepetitionReport)
+    def run_anti_repetition_report(project_id: str) -> AntiRepetitionReport:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if project.series_id is None:
+            raise HTTPException(status_code=409, detail="Project must be linked to a series first")
+        if project.episode_spec is None:
+            raise HTTPException(status_code=409, detail="Project must have an episode spec first")
+
+        candidate_projects = [
+            candidate
+            for candidate in storage.list_projects()
+            if candidate.id != project.id and candidate.series_id == project.series_id and candidate.episode_spec is not None
+        ]
+        report = build_anti_repetition_report(
+            project,
+            candidate_projects,
+            current_lyrics=storage.get_lyrics(project_id),
+            current_storyboard=storage.get_storyboard(project_id),
+            other_lyrics_by_project={candidate.id: storage.get_lyrics(candidate.id) for candidate in candidate_projects},
+            other_storyboard_by_project={candidate.id: storage.get_storyboard(candidate.id) for candidate in candidate_projects},
+        )
+        return storage.save_anti_repetition_report(project_id, report)
+
     @app.get("/api/projects/{project_id}/next-action", response_model=ProjectNextAction)
     def read_project_next_action(project_id: str) -> ProjectNextAction:
         project = storage.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        return get_project_next_action(project)
+        return get_project_next_action(project, storage.get_anti_repetition_report(project_id))
 
     @app.post("/api/server/test-connection")
     def test_server_connection():

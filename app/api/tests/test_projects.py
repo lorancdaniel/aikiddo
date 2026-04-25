@@ -11,6 +11,78 @@ def make_client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def create_minimal_series(client: TestClient, name: str = "English Action Songs") -> dict:
+    return client.post(
+        "/api/series",
+        json={
+            "name": name,
+            "target_age_min": 3,
+            "target_age_max": 5,
+            "primary_language": "en",
+            "learning_domain": "ESL",
+            "series_premise": "Short movement songs for preschool English practice.",
+            "main_characters": [],
+            "visual_style": "bright 2D classroom scenes",
+            "music_style": "upbeat call-and-response",
+            "voice_rules": "clear pronunciation",
+            "safety_rules": ["no unsafe actions"],
+            "forbidden_content": ["violence"],
+            "made_for_kids_default": True,
+        },
+    ).json()
+
+
+def create_project_with_episode_spec(
+    client: TestClient,
+    *,
+    series_id: str,
+    title: str,
+    topic: str,
+    objective: str,
+    vocabulary: list[str],
+) -> dict:
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": title,
+            "topic": topic,
+            "age_range": "3-5",
+            "emotional_tone": "radosc",
+            "educational_goal": objective,
+            "characters": [],
+        },
+    ).json()
+    client.put(f"/api/projects/{project['id']}/series", json={"series_id": series_id})
+    client.put(
+        f"/api/projects/{project['id']}/episode-spec",
+        json={
+            "working_title": title,
+            "topic": topic,
+            "target_age_min": 3,
+            "target_age_max": 5,
+            "learning_objective": {
+                "statement": objective,
+                "domain": "vocabulary",
+                "vocabulary_terms": vocabulary,
+                "success_criteria": ["child repeats target words"],
+            },
+            "format": "song_video",
+            "target_duration_sec": 150,
+            "audience_context": "both",
+            "search_keywords": [topic, "preschool song"],
+            "derivative_plan": {
+                "make_shorts": True,
+                "make_reels": True,
+                "make_parent_teacher_page": True,
+                "make_lyrics_page": True,
+            },
+            "made_for_kids": True,
+        },
+    )
+    client.post(f"/api/projects/{project['id']}/episode-spec/approve", json={})
+    return client.get(f"/api/projects/{project['id']}").json()
+
+
 def test_health_reports_mock_adapter(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
@@ -49,6 +121,166 @@ def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:
     assert saved_project["id"] == project_id
     assert saved_brief["topic"] == "mycie zebow"
     assert saved_brief["characters"] == ["toothbrush_friend_v1"]
+
+
+def test_stage_catalog_exposes_display_names_without_renaming_stage_ids(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    response = client.get("/api/stages/catalog")
+
+    assert response.status_code == 200
+    catalog = {item["stage"]: item for item in response.json()}
+    assert catalog["render.full_episode"]["display_name"] == "Primary video"
+    assert catalog["render.full_episode"]["future_stage"] == "render.primary_video"
+    assert catalog["quality.compliance_report"]["display_name"] == "Safety, quality & rights review"
+    assert catalog["quality.compliance_report"]["future_stage"] == "safety_quality_rights_review"
+
+
+def test_series_bible_can_be_created_and_linked_to_project(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Action colors",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "energia",
+            "educational_goal": "dziecko powtarza kolory po angielsku",
+            "characters": [],
+        },
+    ).json()
+
+    series_response = client.post(
+        "/api/series",
+        json={
+            "name": "English Action Songs",
+            "target_age_min": 3,
+            "target_age_max": 5,
+            "primary_language": "en",
+            "secondary_language": "pl",
+            "learning_domain": "ESL",
+            "series_premise": "Short movement songs for preschool English practice.",
+            "main_characters": [
+                {
+                    "name": "Mila",
+                    "role": "teacher",
+                    "visual_description": "Warm preschool teacher in simple bright 2D style.",
+                    "personality": "calm, playful, precise",
+                    "voice_notes": "clear pronunciation, medium tempo",
+                }
+            ],
+            "visual_style": "bright 2D classroom scenes",
+            "music_style": "upbeat call-and-response",
+            "voice_rules": "simple words, clear pronunciation, no shouting",
+            "safety_rules": ["no unsafe actions", "no fear pressure"],
+            "forbidden_content": ["violence", "brand mascots", "endless-watch prompts"],
+            "thumbnail_rules": "single clear action with high contrast object",
+            "made_for_kids_default": True,
+        },
+    )
+
+    assert series_response.status_code == 201
+    series = series_response.json()
+    assert series["status"] == "draft"
+    assert series["name"] == "English Action Songs"
+
+    link_response = client.put(f"/api/projects/{project['id']}/series", json={"series_id": series["id"]})
+
+    assert link_response.status_code == 200
+    linked_project = link_response.json()
+    assert linked_project["series_id"] == series["id"]
+
+    listed_series = client.get("/api/series")
+    assert listed_series.status_code == 200
+    assert [item["id"] for item in listed_series.json()] == [series["id"]]
+
+
+def test_episode_spec_can_be_saved_approved_and_used_by_next_action(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Colors with movement",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "radosc",
+            "educational_goal": "dziecko rozpoznaje pięć kolorów",
+            "characters": [],
+        },
+    ).json()
+    series = client.post(
+        "/api/series",
+        json={
+            "name": "English Action Songs",
+            "target_age_min": 3,
+            "target_age_max": 5,
+            "primary_language": "en",
+            "learning_domain": "ESL",
+            "series_premise": "Short movement songs for preschool English practice.",
+            "main_characters": [],
+            "visual_style": "bright 2D classroom scenes",
+            "music_style": "upbeat call-and-response",
+            "voice_rules": "clear pronunciation",
+            "safety_rules": ["no unsafe actions"],
+            "forbidden_content": ["violence"],
+            "made_for_kids_default": True,
+        },
+    ).json()
+
+    missing_strategy_action = client.get(f"/api/projects/{project['id']}/next-action").json()
+    assert missing_strategy_action["action_type"] == "define_series"
+    assert missing_strategy_action["severity"] == "blocker"
+
+    client.put(f"/api/projects/{project['id']}/series", json={"series_id": series["id"]})
+    missing_spec_action = client.get(f"/api/projects/{project['id']}/next-action").json()
+    assert missing_spec_action["action_type"] == "complete_episode_spec"
+
+    spec_response = client.put(
+        f"/api/projects/{project['id']}/episode-spec",
+        json={
+            "working_title": "Colors Action Song",
+            "topic": "basic colors",
+            "target_age_min": 3,
+            "target_age_max": 5,
+            "learning_objective": {
+                "statement": "Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+                "domain": "vocabulary",
+                "vocabulary_terms": ["red", "blue", "yellow", "green", "purple"],
+                "success_criteria": ["child repeats five colors", "child matches colors to objects"],
+            },
+            "format": "song_video",
+            "target_duration_sec": 150,
+            "audience_context": "both",
+            "search_keywords": ["colors song", "preschool ESL"],
+            "hook_idea": "Children point to classroom objects while singing colors.",
+            "derivative_plan": {
+                "make_shorts": True,
+                "make_reels": True,
+                "make_parent_teacher_page": True,
+                "make_lyrics_page": True,
+            },
+            "made_for_kids": True,
+            "risk_notes": "Avoid template repetition and brand-like characters.",
+        },
+    )
+
+    assert spec_response.status_code == 200
+    assert spec_response.json()["approval_status"] == "draft"
+
+    needs_approval_action = client.get(f"/api/projects/{project['id']}/next-action").json()
+    assert needs_approval_action["action_type"] == "approve_episode_spec"
+
+    approve_response = client.post(f"/api/projects/{project['id']}/episode-spec/approve", json={"note": "Cel edukacyjny jest konkretny."})
+    assert approve_response.status_code == 200
+    assert approve_response.json()["episode_spec"]["approval_status"] == "approved"
+
+    check_action = client.get(f"/api/projects/{project['id']}/next-action").json()
+    assert check_action["action_type"] == "run_anti_repetition_check"
+
+    client.post(f"/api/projects/{project['id']}/anti-repetition/run")
+    brief_action = client.get(f"/api/projects/{project['id']}/next-action").json()
+    assert brief_action["action_type"] == "approve"
+    assert brief_action["stage"] == "brief.generate"
 
 
 def test_mock_server_connection_is_ready(tmp_path: Path) -> None:
@@ -241,6 +473,53 @@ def test_project_next_action_guides_operator_through_review_and_run_steps(tmp_pa
             "characters": [],
         },
     ).json()
+    series = client.post(
+        "/api/series",
+        json={
+            "name": "Counting Songs",
+            "target_age_min": 4,
+            "target_age_max": 6,
+            "primary_language": "pl",
+            "learning_domain": "math",
+            "series_premise": "Songs that teach early counting through simple movement.",
+            "main_characters": [],
+            "visual_style": "bright simple shapes",
+            "music_style": "gentle clapping rhythm",
+            "voice_rules": "slow and clear",
+            "safety_rules": ["no unsafe actions"],
+            "forbidden_content": ["fear"],
+            "made_for_kids_default": True,
+        },
+    ).json()
+    client.put(f"/api/projects/{created['id']}/series", json={"series_id": series["id"]})
+    client.put(
+        f"/api/projects/{created['id']}/episode-spec",
+        json={
+            "working_title": "Liczymy do trzech",
+            "topic": "liczenie",
+            "target_age_min": 4,
+            "target_age_max": 6,
+            "learning_objective": {
+                "statement": "Dziecko liczy do trzech i powtarza liczby w rytmie piosenki.",
+                "domain": "counting",
+                "vocabulary_terms": ["jeden", "dwa", "trzy"],
+                "success_criteria": ["child counts to three", "child repeats each number"],
+            },
+            "format": "song_video",
+            "target_duration_sec": 120,
+            "audience_context": "both",
+            "search_keywords": ["liczenie do trzech", "piosenka dla dzieci"],
+            "derivative_plan": {
+                "make_shorts": True,
+                "make_reels": True,
+                "make_parent_teacher_page": True,
+                "make_lyrics_page": True,
+            },
+            "made_for_kids": True,
+        },
+    )
+    client.post(f"/api/projects/{created['id']}/episode-spec/approve", json={})
+    client.post(f"/api/projects/{created['id']}/anti-repetition/run")
 
     first_action = client.get(f"/api/projects/{created['id']}/next-action")
     assert first_action.status_code == 200
@@ -249,6 +528,7 @@ def test_project_next_action_guides_operator_through_review_and_run_steps(tmp_pa
         "stage": "brief.generate",
         "label": "Brief",
         "message": "Brief czeka na akceptację operatora.",
+        "severity": "info",
     }
 
     client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
@@ -259,6 +539,7 @@ def test_project_next_action_guides_operator_through_review_and_run_steps(tmp_pa
         "stage": "lyrics.generate",
         "label": "Tekst",
         "message": "Możesz uruchomić etap Tekst.",
+        "severity": "info",
     }
 
     client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
@@ -269,6 +550,7 @@ def test_project_next_action_guides_operator_through_review_and_run_steps(tmp_pa
         "stage": "lyrics.generate",
         "label": "Tekst",
         "message": "Tekst czeka na akceptację operatora.",
+        "severity": "info",
     }
 
 
@@ -646,6 +928,105 @@ def test_publish_prepare_package_writes_completed_package_manifest(tmp_path: Pat
     stage = next(item for item in project["pipeline"] if item["stage"] == "publish.prepare_package")
     assert stage["status"] == "completed"
     assert stage["job_id"] == job["id"]
+
+
+def test_anti_repetition_report_flags_similar_project_in_same_series(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    series = create_minimal_series(client)
+    first = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+    second = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+
+    response = client.post(f"/api/projects/{second['id']}/anti-repetition/run")
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["project_id"] == second["id"]
+    assert report["series_id"] == series["id"]
+    assert report["status"] == "blocker"
+    assert report["score"] >= 0.7
+    assert report["compared_projects_count"] == 1
+    assert report["closest_matches"][0]["project_id"] == first["id"]
+    assert "similar title" in report["closest_matches"][0]["reasons"]
+
+    saved_response = client.get(f"/api/projects/{second['id']}/anti-repetition")
+    assert saved_response.status_code == 200
+    assert saved_response.json()["id"] == report["id"]
+
+
+def test_anti_repetition_ignores_projects_from_other_series(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    first_series = create_minimal_series(client, "Colors Songs")
+    second_series = create_minimal_series(client, "Routine Songs")
+    create_project_with_episode_spec(
+        client,
+        series_id=first_series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+    second = create_project_with_episode_spec(
+        client,
+        series_id=second_series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+
+    response = client.post(f"/api/projects/{second['id']}/anti-repetition/run")
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["status"] == "ok"
+    assert report["score"] == 0
+    assert report["compared_projects_count"] == 0
+    assert report["closest_matches"] == []
+
+
+def test_next_action_surfaces_anti_repetition_blocker_before_pipeline_run(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    series = create_minimal_series(client)
+    create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+    second = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Colors Action Song",
+        topic="basic colors",
+        objective="Dziecko 3-5 lat rozpoznaje i powtarza pięć kolorów po angielsku.",
+        vocabulary=["red", "blue", "yellow", "green", "purple"],
+    )
+
+    missing_report_action = client.get(f"/api/projects/{second['id']}/next-action").json()
+    assert missing_report_action["action_type"] == "run_anti_repetition_check"
+
+    client.post(f"/api/projects/{second['id']}/anti-repetition/run")
+    blocker_action = client.get(f"/api/projects/{second['id']}/next-action").json()
+
+    assert blocker_action["action_type"] == "fix_repetition_risk"
+    assert blocker_action["severity"] == "blocker"
+    assert "zbyt podobny" in blocker_action["message"]
 
 
 def test_artifact_inventory_lists_project_manifest_files(tmp_path: Path) -> None:

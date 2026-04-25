@@ -4,12 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, BookOpenCheck, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, Server, Sparkles, Target, Wand2 } from "lucide-react";
 import {
+  AntiRepetitionReport,
+  approveEpisodeSpec,
   approveStage,
   ArtifactInventoryItem,
   ComplianceReportArtifact,
+  createSeries,
   createProject,
+  EpisodeSpecInput,
   fetchArtifactInventory,
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
@@ -18,7 +22,9 @@ import {
   fetchProjectJobs,
   fetchProjectNextAction,
   fetchPublishPackageArtifact,
+  fetchAntiRepetitionReport,
   fetchProjects,
+  fetchSeries,
   fetchLyricsArtifact,
   fetchReelsArtifact,
   fetchServerProfile,
@@ -27,17 +33,22 @@ import {
   FullEpisodeArtifact,
   Job,
   KeyframesArtifact,
+  linkProjectSeries,
   LyricsArtifact,
   Project,
   ProjectInput,
   ProjectNextAction,
   PublishPackageArtifact,
   ReelsArtifact,
+  runAntiRepetition,
   runStage,
+  saveEpisodeSpec,
   saveServerProfile,
   ServerConnection,
   ServerProfile,
   ServerProfileInput,
+  SeriesBible,
+  SeriesBibleInput,
   StageApproval,
   StoryboardArtifact,
   testServerConnection,
@@ -76,6 +87,21 @@ function splitCharacters(value: string) {
     .filter(Boolean);
 }
 
+function splitList(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseAgeRange(value: string) {
+  const matches = value.match(/\d+/g)?.map(Number) ?? [];
+  return {
+    min: matches[0] ?? 3,
+    max: matches[1] ?? matches[0] ?? 5
+  };
+}
+
 function statusClass(status: string) {
   if (status === "completed") return "bg-[var(--teal)] text-[#07110f]";
   if (status === "needs_review") return "bg-[var(--acid)] text-[#101200]";
@@ -97,9 +123,66 @@ function canRunPipelineStage(project: Project | null, stage: string) {
   return currentStage.status === "pending" && previousStage.status === "completed";
 }
 
+function createSeriesDefaults(project: Project | null): SeriesBibleInput & { safety_rules_text: string; forbidden_content_text: string } {
+  const age = parseAgeRange(project?.brief.age_range ?? "3-5");
+  return {
+    name: project ? `${project.brief.topic} series` : "",
+    status: "draft",
+    target_age_min: age.min,
+    target_age_max: age.max,
+    primary_language: "pl",
+    secondary_language: "en",
+    learning_domain: project?.brief.educational_goal ?? "",
+    series_premise: "",
+    main_characters: [],
+    visual_style: "",
+    music_style: "",
+    voice_rules: "",
+    safety_rules: [],
+    forbidden_content: [],
+    thumbnail_rules: "",
+    made_for_kids_default: true,
+    safety_rules_text: "no unsafe actions, no fear pressure",
+    forbidden_content_text: "violence, brand mascots, endless-watch prompts"
+  };
+}
+
+function createEpisodeSpecDefaults(project: Project | null): EpisodeSpecInput & { vocabulary_text: string; search_keywords_text: string; success_criteria_text: string } {
+  const age = parseAgeRange(project?.brief.age_range ?? "3-5");
+  return {
+    working_title: project?.title ?? "",
+    topic: project?.brief.topic ?? "",
+    target_age_min: age.min,
+    target_age_max: age.max,
+    learning_objective: {
+      statement: project?.brief.educational_goal ?? "",
+      domain: "vocabulary",
+      vocabulary_terms: [],
+      success_criteria: []
+    },
+    format: "song_video",
+    target_duration_sec: 150,
+    audience_context: "both",
+    search_keywords: [],
+    hook_idea: "",
+    derivative_plan: {
+      make_shorts: true,
+      make_reels: true,
+      make_parent_teacher_page: true,
+      make_lyrics_page: true
+    },
+    made_for_kids: true,
+    risk_notes: "",
+    vocabulary_text: "",
+    search_keywords_text: "",
+    success_criteria_text: ""
+  };
+}
+
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [seriesList, setSeriesList] = useState<SeriesBible[]>([]);
   const [connection, setConnection] = useState<ServerConnection | null>(null);
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
   const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
@@ -110,6 +193,7 @@ export default function Home() {
   const [reelsArtifact, setReelsArtifact] = useState<ReelsArtifact | null>(null);
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
+  const [antiRepetitionReport, setAntiRepetitionReport] = useState<AntiRepetitionReport | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
@@ -132,8 +216,14 @@ export default function Home() {
     ssh_key_path: "~/.ssh/ai_kids_studio",
     tailscale_name: "gpu-studio"
   });
+  const [seriesForm, setSeriesForm] = useState(createSeriesDefaults(null));
+  const [episodeSpecForm, setEpisodeSpecForm] = useState(createEpisodeSpecDefaults(null));
   const [jobMessage, setJobMessage] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isSavingSeries, setIsSavingSeries] = useState(false);
+  const [isSavingEpisodeSpec, setIsSavingEpisodeSpec] = useState(false);
+  const [isApprovingEpisodeSpec, setIsApprovingEpisodeSpec] = useState(false);
+  const [isRunningAntiRepetition, setIsRunningAntiRepetition] = useState(false);
   const [runningStage, setRunningStage] = useState<string | null>(null);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [approvingStage, setApprovingStage] = useState<string | null>(null);
@@ -142,10 +232,12 @@ export default function Home() {
   useEffect(() => {
     async function loadStudio() {
       try {
-        const [projectList, server] = await Promise.all([fetchProjects(), testServerConnection()]);
+        const [projectList, savedSeries, server] = await Promise.all([fetchProjects(), fetchSeries(), testServerConnection()]);
         setProjects(projectList);
+        setSeriesList(savedSeries);
         const firstProject = projectList[0] ?? null;
         setSelectedProject(firstProject);
+        syncStrategyForms(firstProject);
         if (firstProject) await loadArtifacts(firstProject.id);
         setConnection(server);
         try {
@@ -218,7 +310,26 @@ export default function Home() {
     return `${selectedProject.brief.topic} · ${selectedProject.brief.age_range} · ${selectedProject.brief.emotional_tone}`;
   }, [selectedProject]);
 
+  const selectedSeries = useMemo(() => {
+    if (!selectedProject?.series_id) return null;
+    return seriesList.find((series) => series.id === selectedProject.series_id) ?? null;
+  }, [selectedProject, seriesList]);
+
   const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
+
+  function syncStrategyForms(project: Project | null) {
+    setSeriesForm(createSeriesDefaults(project));
+    if (project?.episode_spec) {
+      setEpisodeSpecForm({
+        ...project.episode_spec,
+        vocabulary_text: project.episode_spec.learning_objective.vocabulary_terms.join(", "),
+        search_keywords_text: project.episode_spec.search_keywords.join(", "),
+        success_criteria_text: project.episode_spec.learning_objective.success_criteria.join(", ")
+      });
+    } else {
+      setEpisodeSpecForm(createEpisodeSpecDefaults(project));
+    }
+  }
 
   async function loadArtifacts(projectId: string) {
     try {
@@ -262,6 +373,11 @@ export default function Home() {
       setPublishPackageArtifact(null);
     }
     try {
+      setAntiRepetitionReport(await fetchAntiRepetitionReport(projectId));
+    } catch {
+      setAntiRepetitionReport(null);
+    }
+    try {
       setArtifactInventory(await fetchArtifactInventory(projectId));
     } catch {
       setArtifactInventory([]);
@@ -300,6 +416,7 @@ export default function Home() {
       });
       setProjects((current) => [created, ...current.filter((project) => project.id !== created.id)]);
       setSelectedProject(created);
+      syncStrategyForms(created);
       setLyricsArtifact(null);
       setStoryboardArtifact(null);
       setKeyframesArtifact(null);
@@ -308,15 +425,11 @@ export default function Home() {
       setReelsArtifact(null);
       setComplianceReportArtifact(null);
       setPublishPackageArtifact(null);
+      setAntiRepetitionReport(null);
       setArtifactInventory([]);
       setProjectJobs([]);
       setStageApprovals([]);
-      setNextAction({
-        action_type: "approve",
-        stage: "brief.generate",
-        label: "Brief",
-        message: "Brief czeka na akceptację operatora."
-      });
+      await loadArtifacts(created.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -358,6 +471,131 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Nie udało się zapisać profilu serwera.");
     } finally {
       setIsSavingServer(false);
+    }
+  }
+
+  async function refreshSelectedProject(projectId: string) {
+    const updatedProjects = await fetchProjects();
+    const updatedProject = updatedProjects.find((project) => project.id === projectId) ?? null;
+    setProjects(updatedProjects);
+    setSelectedProject(updatedProject);
+    syncStrategyForms(updatedProject);
+    if (updatedProject) await loadArtifacts(updatedProject.id);
+  }
+
+  async function handleCreateSeries(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProject) return;
+    setIsSavingSeries(true);
+    setError("");
+    setJobMessage("");
+
+    try {
+      const createdSeries = await createSeries({
+        name: seriesForm.name,
+        status: "draft",
+        target_age_min: Number(seriesForm.target_age_min),
+        target_age_max: Number(seriesForm.target_age_max),
+        primary_language: seriesForm.primary_language,
+        secondary_language: seriesForm.secondary_language || null,
+        learning_domain: seriesForm.learning_domain,
+        series_premise: seriesForm.series_premise,
+        main_characters: seriesForm.main_characters,
+        visual_style: seriesForm.visual_style,
+        music_style: seriesForm.music_style,
+        voice_rules: seriesForm.voice_rules,
+        safety_rules: splitList(seriesForm.safety_rules_text),
+        forbidden_content: splitList(seriesForm.forbidden_content_text),
+        thumbnail_rules: seriesForm.thumbnail_rules ?? "",
+        made_for_kids_default: seriesForm.made_for_kids_default
+      });
+      const updatedProject = await linkProjectSeries(selectedProject.id, createdSeries.id);
+      const updatedSeries = await fetchSeries();
+      setSeriesList(updatedSeries);
+      setSelectedProject(updatedProject);
+      setProjects((current) => [updatedProject, ...current.filter((project) => project.id !== updatedProject.id)]);
+      syncStrategyForms(updatedProject);
+      await loadArtifacts(updatedProject.id);
+      setJobMessage(`Seria ${createdSeries.name} zapisana i przypięta do projektu.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się zapisać serii.");
+    } finally {
+      setIsSavingSeries(false);
+    }
+  }
+
+  async function handleSaveEpisodeSpec(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProject) return;
+    setIsSavingEpisodeSpec(true);
+    setError("");
+    setJobMessage("");
+
+    try {
+      await saveEpisodeSpec(selectedProject.id, {
+        working_title: episodeSpecForm.working_title,
+        topic: episodeSpecForm.topic,
+        target_age_min: episodeSpecForm.target_age_min === null ? null : Number(episodeSpecForm.target_age_min),
+        target_age_max: episodeSpecForm.target_age_max === null ? null : Number(episodeSpecForm.target_age_max),
+        learning_objective: {
+          statement: episodeSpecForm.learning_objective.statement,
+          domain: episodeSpecForm.learning_objective.domain,
+          vocabulary_terms: splitList(episodeSpecForm.vocabulary_text),
+          success_criteria: splitList(episodeSpecForm.success_criteria_text)
+        },
+        format: episodeSpecForm.format,
+        target_duration_sec: Number(episodeSpecForm.target_duration_sec),
+        audience_context: episodeSpecForm.audience_context,
+        search_keywords: splitList(episodeSpecForm.search_keywords_text),
+        hook_idea: episodeSpecForm.hook_idea ?? "",
+        derivative_plan: episodeSpecForm.derivative_plan,
+        made_for_kids: episodeSpecForm.made_for_kids,
+        risk_notes: episodeSpecForm.risk_notes ?? ""
+      });
+      await refreshSelectedProject(selectedProject.id);
+      setJobMessage("Episode Spec zapisany.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się zapisać Episode Spec.");
+    } finally {
+      setIsSavingEpisodeSpec(false);
+    }
+  }
+
+  async function handleApproveEpisodeSpec() {
+    if (!selectedProject) return;
+    setIsApprovingEpisodeSpec(true);
+    setError("");
+    setJobMessage("");
+
+    try {
+      const updated = await approveEpisodeSpec(selectedProject.id, "Episode Spec approved for production.");
+      setSelectedProject(updated);
+      setProjects((current) => [updated, ...current.filter((project) => project.id !== updated.id)]);
+      syncStrategyForms(updated);
+      await loadArtifacts(updated.id);
+      setJobMessage("Episode Spec zatwierdzony.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się zatwierdzić Episode Spec.");
+    } finally {
+      setIsApprovingEpisodeSpec(false);
+    }
+  }
+
+  async function handleRunAntiRepetition() {
+    if (!selectedProject) return;
+    setIsRunningAntiRepetition(true);
+    setError("");
+    setJobMessage("");
+
+    try {
+      const report = await runAntiRepetition(selectedProject.id);
+      setAntiRepetitionReport(report);
+      await loadArtifacts(selectedProject.id);
+      setJobMessage(`Anti-Repetition: ${report.status} (${report.score.toFixed(2)}).`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić Anti-Repetition.");
+    } finally {
+      setIsRunningAntiRepetition(false);
     }
   }
 
@@ -576,6 +814,7 @@ export default function Home() {
                   type="button"
                   onClick={async () => {
                     setSelectedProject(project);
+                    syncStrategyForms(project);
                     await loadArtifacts(project.id);
                   }}
                 >
@@ -584,6 +823,173 @@ export default function Home() {
                 </button>
               ))
             )}
+          </div>
+        </article>
+
+        <article className="studio-card rounded-[1.4rem] p-5 md:col-span-12 md:p-7" data-testid="content-strategy">
+          <div className="flex flex-wrap items-start justify-between gap-5">
+            <div>
+              <h2 className="text-3xl font-black">Content Strategy</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
+                Warstwa decyzyjna nad pipeline: seria, cel edukacyjny i publikowalność zanim zaczniemy palić czas operatora.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-black text-white/72">
+              <Target size={16} />
+              {selectedProject?.episode_spec?.approval_status ?? "draft"}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
+            <form className="rounded-2xl border border-white/10 bg-black/20 p-4 md:p-5" onSubmit={handleCreateSeries}>
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-lg font-black">Series Bible</p>
+                  <p className="mt-1 text-xs text-white/48">
+                    {selectedSeries ? `Przypięta seria: ${selectedSeries.name}` : "Brak przypiętej serii"}
+                  </p>
+                </div>
+                <BookOpenCheck className="text-[var(--teal)]" size={22} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2 text-sm text-white/70">
+                  Nazwa serii
+                  <input className="field" required value={seriesForm.name} onChange={(event) => setSeriesForm({ ...seriesForm, name: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Domena nauki
+                  <input className="field" required value={seriesForm.learning_domain} onChange={(event) => setSeriesForm({ ...seriesForm, learning_domain: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70 md:col-span-2">
+                  Założenie serii
+                  <textarea className="field min-h-20 resize-none" required value={seriesForm.series_premise} onChange={(event) => setSeriesForm({ ...seriesForm, series_premise: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Styl wizualny serii
+                  <input className="field" required value={seriesForm.visual_style} onChange={(event) => setSeriesForm({ ...seriesForm, visual_style: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Styl muzyczny serii
+                  <input className="field" required value={seriesForm.music_style} onChange={(event) => setSeriesForm({ ...seriesForm, music_style: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Reguły głosu
+                  <input className="field" required value={seriesForm.voice_rules} onChange={(event) => setSeriesForm({ ...seriesForm, voice_rules: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Zasady bezpieczeństwa
+                  <input className="field" required value={seriesForm.safety_rules_text} onChange={(event) => setSeriesForm({ ...seriesForm, safety_rules_text: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70 md:col-span-2">
+                  Zakazane treści
+                  <input className="field" required value={seriesForm.forbidden_content_text} onChange={(event) => setSeriesForm({ ...seriesForm, forbidden_content_text: event.target.value })} />
+                </label>
+              </div>
+              <button
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--acid)] px-4 py-3 font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                type="submit"
+                disabled={!selectedProject || isSavingSeries}
+              >
+                {isSavingSeries ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
+                Zapisz serię
+              </button>
+            </form>
+
+            <form className="rounded-2xl border border-white/10 bg-white/7 p-4 md:p-5" onSubmit={handleSaveEpisodeSpec}>
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-lg font-black">Episode Spec</p>
+                  <p className="mt-1 text-xs text-white/48">Learning objective, format i plan pochodnych.</p>
+                </div>
+                <ListChecks className="text-[var(--acid)]" size={22} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2 text-sm text-white/70">
+                  Roboczy tytuł
+                  <input className="field" required value={episodeSpecForm.working_title} onChange={(event) => setEpisodeSpecForm({ ...episodeSpecForm, working_title: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Zakres odcinka
+                  <input className="field" required value={episodeSpecForm.topic} onChange={(event) => setEpisodeSpecForm({ ...episodeSpecForm, topic: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70 md:col-span-2">
+                  Learning objective
+                  <textarea
+                    className="field min-h-20 resize-none"
+                    required
+                    value={episodeSpecForm.learning_objective.statement}
+                    onChange={(event) =>
+                      setEpisodeSpecForm({
+                        ...episodeSpecForm,
+                        learning_objective: { ...episodeSpecForm.learning_objective, statement: event.target.value }
+                      })
+                    }
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Słownictwo
+                  <input className="field" value={episodeSpecForm.vocabulary_text} onChange={(event) => setEpisodeSpecForm({ ...episodeSpecForm, vocabulary_text: event.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm text-white/70">
+                  Słowa kluczowe
+                  <input className="field" value={episodeSpecForm.search_keywords_text} onChange={(event) => setEpisodeSpecForm({ ...episodeSpecForm, search_keywords_text: event.target.value })} />
+                </label>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <button
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="submit"
+                  disabled={!selectedProject || isSavingEpisodeSpec}
+                >
+                  {isSavingEpisodeSpec ? <Loader2 size={18} className="animate-spin" /> : <Target size={18} />}
+                  Zapisz Episode Spec
+                </button>
+                <button
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--teal)] px-4 py-3 font-black text-[#07110f] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  onClick={handleApproveEpisodeSpec}
+                  disabled={!selectedProject?.episode_spec || isApprovingEpisodeSpec}
+                >
+                  {isApprovingEpisodeSpec ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
+                  Zatwierdź Episode Spec
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-[var(--mist)] p-4 text-[var(--ink)] md:p-5" data-testid="repetition-risk">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-lg font-black">Repetition Risk</p>
+                <p className="mt-1 text-sm font-semibold leading-6">
+                  {antiRepetitionReport
+                    ? `${antiRepetitionReport.status} · score ${antiRepetitionReport.score.toFixed(2)} · compared ${antiRepetitionReport.compared_projects_count}`
+                    : "Brak raportu dla tego projektu."}
+                </p>
+              </div>
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-3 text-sm font-black text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                onClick={handleRunAntiRepetition}
+                disabled={!selectedProject?.episode_spec || selectedProject.episode_spec.approval_status !== "approved" || isRunningAntiRepetition}
+              >
+                {isRunningAntiRepetition ? <Loader2 size={16} className="animate-spin" /> : <Target size={16} />}
+                Uruchom Anti-Repetition
+              </button>
+            </div>
+            {antiRepetitionReport?.closest_matches.length ? (
+              <div className="mt-4 grid gap-2">
+                {antiRepetitionReport.closest_matches.map((match) => (
+                  <div key={match.project_id} className="rounded-xl bg-black/8 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-black">{match.title}</p>
+                      <span className="rounded-full bg-[var(--ink)] px-2 py-1 text-xs font-black text-white">{match.score.toFixed(2)}</span>
+                    </div>
+                    <p className="mt-1 text-xs font-semibold text-[var(--ink)]/62">{match.reasons.join(", ")}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </article>
 

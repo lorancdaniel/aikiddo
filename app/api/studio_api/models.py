@@ -43,6 +43,64 @@ STAGE_LABELS = {
     "publish.prepare_package": "Paczka",
 }
 
+STAGE_DISPLAY_CATALOG = {
+    "brief.generate": {
+        "display_name": "Episode brief",
+        "future_stage": "episode.spec",
+        "description": "Operator brief for one publishable content unit.",
+    },
+    "lyrics.generate": {
+        "display_name": "Lyrics",
+        "future_stage": "lyrics.script_generate",
+        "description": "Educational lyrics and script lines.",
+    },
+    "characters.import_or_approve": {
+        "display_name": "Visual style sample",
+        "future_stage": "visual.sample_generate",
+        "description": "Project-level style sample that should eventually be inherited from a series bible.",
+    },
+    "audio.generate_or_import": {
+        "display_name": "Song audio",
+        "future_stage": "song.audio_generate",
+        "description": "Generated or imported song audio.",
+    },
+    "storyboard.generate": {
+        "display_name": "Timed storyboard",
+        "future_stage": "storyboard.timed_generate",
+        "description": "Scene plan aligned to the song structure.",
+    },
+    "keyframes.generate": {
+        "display_name": "Visual samples",
+        "future_stage": "visual.sample_generate",
+        "description": "Representative frames for visual continuity review.",
+    },
+    "video.scenes.generate": {
+        "display_name": "Scene renders",
+        "future_stage": "scenes.render_generate",
+        "description": "Rendered scene clips assembled from approved visual direction.",
+    },
+    "render.full_episode": {
+        "display_name": "Primary video",
+        "future_stage": "render.primary_video",
+        "description": "Primary horizontal video output; full episodes move to a future compilation step.",
+    },
+    "render.reels": {
+        "display_name": "Derivatives",
+        "future_stage": "derivatives.generate",
+        "description": "Shorts, reels, teasers, thumbnail variants, and companion assets.",
+    },
+    "quality.compliance_report": {
+        "display_name": "Safety, quality & rights review",
+        "future_stage": "safety_quality_rights_review",
+        "description": "Human-readable readiness check for kids quality, rights, and platform risk.",
+    },
+    "publish.prepare_package": {
+        "display_name": "Publish package",
+        "future_stage": "publish.package_prepare",
+        "description": "Metadata, manifests, and upload-ready publishing materials.",
+    },
+}
+
 HUMAN_REVIEW_STAGES = {
     "brief.generate",
     "lyrics.generate",
@@ -226,6 +284,120 @@ class ArtifactInventoryItem(BaseModel):
     updated_at: str | None = None
 
 
+class AntiRepetitionSignals(BaseModel):
+    title_similarity: float | None = None
+    topic_similarity: float | None = None
+    objective_similarity: float | None = None
+    vocabulary_overlap: float | None = None
+    lyrics_similarity: float | None = None
+    storyboard_similarity: float | None = None
+
+
+class AntiRepetitionMatch(BaseModel):
+    project_id: str
+    title: str
+    score: float
+    reasons: list[str]
+
+
+class AntiRepetitionReport(BaseModel):
+    id: str
+    project_id: str
+    series_id: str | None = None
+    status: Literal["ok", "warning", "review_recommended", "blocker"]
+    score: float
+    compared_projects_count: int
+    closest_matches: list[AntiRepetitionMatch]
+    signals: AntiRepetitionSignals
+    generated_at: str
+
+
+class StageCatalogItem(BaseModel):
+    stage: str
+    label: str
+    display_name: str
+    future_stage: str
+    description: str
+
+
+class SeriesCharacter(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    role: str = Field(min_length=1, max_length=80)
+    visual_description: str = Field(min_length=1, max_length=500)
+    personality: str = Field(min_length=1, max_length=240)
+    voice_notes: str = Field(default="", max_length=240)
+
+
+class SeriesBibleInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    status: Literal["draft", "active", "archived"] = "draft"
+    target_age_min: int = Field(ge=0, le=18)
+    target_age_max: int = Field(ge=0, le=18)
+    primary_language: str = Field(min_length=2, max_length=16)
+    secondary_language: str | None = Field(default=None, max_length=16)
+    learning_domain: str = Field(min_length=1, max_length=80)
+    series_premise: str = Field(min_length=1, max_length=600)
+    main_characters: list[SeriesCharacter] = Field(default_factory=list)
+    visual_style: str = Field(min_length=1, max_length=600)
+    music_style: str = Field(min_length=1, max_length=320)
+    voice_rules: str = Field(min_length=1, max_length=500)
+    safety_rules: list[str] = Field(default_factory=list)
+    forbidden_content: list[str] = Field(default_factory=list)
+    thumbnail_rules: str = Field(default="", max_length=320)
+    made_for_kids_default: bool = True
+
+
+class SeriesBible(SeriesBibleInput):
+    id: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectSeriesLinkInput(BaseModel):
+    series_id: str
+
+
+class LearningObjective(BaseModel):
+    statement: str = Field(min_length=1, max_length=500)
+    domain: str = Field(min_length=1, max_length=80)
+    vocabulary_terms: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+
+
+class DerivativePlan(BaseModel):
+    make_shorts: bool = True
+    make_reels: bool = True
+    make_parent_teacher_page: bool = True
+    make_lyrics_page: bool = True
+
+
+class EpisodeSpecInput(BaseModel):
+    working_title: str = Field(min_length=1, max_length=160)
+    topic: str = Field(min_length=1, max_length=160)
+    target_age_min: int | None = Field(default=None, ge=0, le=18)
+    target_age_max: int | None = Field(default=None, ge=0, le=18)
+    learning_objective: LearningObjective
+    format: Literal["song_video", "short", "compilation_seed", "lesson_clip"] = "song_video"
+    target_duration_sec: int = Field(ge=15, le=3600)
+    audience_context: Literal["home", "classroom", "both"] = "both"
+    search_keywords: list[str] = Field(default_factory=list)
+    hook_idea: str = Field(default="", max_length=500)
+    derivative_plan: DerivativePlan = Field(default_factory=DerivativePlan)
+    made_for_kids: bool = True
+    risk_notes: str = Field(default="", max_length=700)
+
+
+class EpisodeSpec(EpisodeSpecInput):
+    project_id: str
+    series_id: str | None = None
+    approval_status: Literal["draft", "approved", "needs_changes"] = "draft"
+    approved_at: str | None = None
+    approved_by: str | None = None
+    approval_note: str = ""
+    created_at: str
+    updated_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING
@@ -250,16 +422,31 @@ class Project(BaseModel):
     id: str
     title: str
     brief: Brief
+    series_id: str | None = None
+    episode_spec: EpisodeSpec | None = None
     pipeline: list[PipelineStage]
     created_at: str
     updated_at: str
 
 
 class ProjectNextAction(BaseModel):
-    action_type: Literal["approve", "run", "done"]
+    action_type: Literal[
+        "approve",
+        "run",
+        "done",
+        "define_series",
+        "complete_episode_spec",
+        "approve_episode_spec",
+        "run_anti_repetition_check",
+        "fix_rejected_stage",
+        "fix_repetition_risk",
+        "complete_publish_package",
+        "enter_performance_metrics",
+    ]
     stage: str | None
     label: str
     message: str
+    severity: Literal["info", "warning", "blocker"] = "info"
 
 
 class Job(BaseModel):

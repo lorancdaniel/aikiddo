@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
 
 
 ARTIFACT_MANIFESTS = [
@@ -14,6 +14,7 @@ ARTIFACT_MANIFESTS = [
     ("full_episode", "full-episode.json"),
     ("reels", "reels.json"),
     ("compliance_report", "compliance-report.json"),
+    ("anti_repetition", "anti-repetition.json"),
     ("publish_package", "publish-package.json"),
 ]
 
@@ -44,6 +45,43 @@ class ProjectStorage:
             encoding="utf-8",
         )
         return project
+
+    def series_dir(self) -> Path:
+        directory = self.studio_dir / "series"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def save_series(self, series: SeriesBible) -> SeriesBible:
+        series.updated_at = utc_now()
+        (self.series_dir() / f"{series.id}.json").write_text(
+            json.dumps(series.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return series
+
+    def create_series(self, series_input: SeriesBibleInput) -> SeriesBible:
+        now = utc_now()
+        series = SeriesBible(
+            id=f"series_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
+            created_at=now,
+            updated_at=now,
+            **series_input.model_dump(),
+        )
+        return self.save_series(series)
+
+    def list_series(self) -> list[SeriesBible]:
+        directory = self.series_dir()
+        series = [
+            SeriesBible.model_validate_json(series_file.read_text(encoding="utf-8"))
+            for series_file in sorted(directory.glob("*.json"))
+        ]
+        return sorted(series, key=lambda item: item.created_at, reverse=True)
+
+    def get_series(self, series_id: str) -> SeriesBible | None:
+        series_file = self.series_dir() / f"{series_id}.json"
+        if not series_file.exists():
+            return None
+        return SeriesBible.model_validate_json(series_file.read_text(encoding="utf-8"))
 
     def list_projects(self) -> list[Project]:
         projects: list[Project] = []
@@ -163,6 +201,19 @@ class ProjectStorage:
         if not report_file.exists():
             return None
         return ComplianceReportArtifact.model_validate_json(report_file.read_text(encoding="utf-8"))
+
+    def save_anti_repetition_report(self, project_id: str, report: AntiRepetitionReport) -> AntiRepetitionReport:
+        (self.project_dir(project_id) / "anti-repetition.json").write_text(
+            json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return report
+
+    def get_anti_repetition_report(self, project_id: str) -> AntiRepetitionReport | None:
+        report_file = self.project_dir(project_id) / "anti-repetition.json"
+        if not report_file.exists():
+            return None
+        return AntiRepetitionReport.model_validate_json(report_file.read_text(encoding="utf-8"))
 
     def save_publish_package(self, project_id: str, package: PublishPackageArtifact) -> PublishPackageArtifact:
         (self.project_dir(project_id) / "publish-package.json").write_text(
