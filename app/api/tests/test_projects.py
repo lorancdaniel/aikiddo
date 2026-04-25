@@ -97,6 +97,7 @@ def remote_output_fixture(project_id: str, stage: str = "lyrics.generate") -> di
             f"projects/{project_id}/jobs/remote_job_from_fixture/lyrics.txt",
             f"projects/{project_id}/jobs/remote_job_from_fixture/song_plan.json",
             f"projects/{project_id}/jobs/remote_job_from_fixture/safety_notes.json",
+            f"projects/{project_id}/jobs/remote_job_from_fixture/audio_preview.wav",
         ],
         "artifacts": [
             {
@@ -127,6 +128,16 @@ def remote_output_fixture(project_id: str, stage: str = "lyrics.generate") -> di
                 "size_bytes": 64,
                 "sha256": "sha-safety",
                 "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/safety_notes.json",
+                "public": False,
+            },
+            {
+                "artifact_id": "audio_preview_wav",
+                "type": "audio_preview",
+                "filename": "audio_preview.wav",
+                "mime_type": "audio/wav",
+                "size_bytes": 88244,
+                "sha256": "sha-audio-preview",
+                "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/audio_preview.wav",
                 "public": False,
             },
         ],
@@ -222,11 +233,17 @@ def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatc
     assert pilot["stage"] == "lyrics.generate"
     assert pilot["schema_version"] == "output.v1"
     assert pilot["preview"]["lyrics"] == "Colors in the rhythm\n"
-    assert [artifact["artifact_id"] for artifact in pilot["artifacts"]] == ["lyrics_txt", "song_plan_json", "safety_notes_json"]
+    assert [artifact["artifact_id"] for artifact in pilot["artifacts"]] == [
+        "lyrics_txt",
+        "song_plan_json",
+        "safety_notes_json",
+        "audio_preview_wav",
+    ]
     assert pilot["output_files"] == [
         f"projects/{project['id']}/jobs/remote_job_from_fixture/lyrics.txt",
         f"projects/{project['id']}/jobs/remote_job_from_fixture/song_plan.json",
         f"projects/{project['id']}/jobs/remote_job_from_fixture/safety_notes.json",
+        f"projects/{project['id']}/jobs/remote_job_from_fixture/audio_preview.wav",
     ]
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
     assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
@@ -341,7 +358,12 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     job_detail_response = client.get(f"/api/jobs/{job['id']}")
 
     assert artifacts.status_code == 200
-    assert [artifact["artifact_id"] for artifact in artifacts.json()] == ["lyrics_txt", "song_plan_json", "safety_notes_json"]
+    assert [artifact["artifact_id"] for artifact in artifacts.json()] == [
+        "lyrics_txt",
+        "song_plan_json",
+        "safety_notes_json",
+        "audio_preview_wav",
+    ]
     assert artifacts.json()[0]["storage_key"].startswith(f"projects/{project['id']}/jobs/")
     assert log_response.status_code == 200
     assert "storage=server" in log_response.json()["log"]

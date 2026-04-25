@@ -1,5 +1,5 @@
-import json
 import hashlib
+import json
 import shlex
 import subprocess
 from uuid import uuid4
@@ -66,9 +66,12 @@ JSON
 python3 - "$job_dir" <<'PY'
 import json
 import hashlib
+import math
 import pathlib
 import socket
+import struct
 import sys
+import wave
 from datetime import datetime, timezone
 
 job_dir = pathlib.Path(sys.argv[1])
@@ -104,10 +107,25 @@ safety_notes = {{
     ],
     "host": socket.gethostname(),
 }}
+sample_rate = 22050
+duration_sec = 2.0
+base_frequency = 330 + (len(brief["topic"]) % 8) * 22
+audio_path = job_dir / "audio_preview.wav"
+with wave.open(str(audio_path), "wb") as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(sample_rate)
+    frames = []
+    for index in range(int(sample_rate * duration_sec)):
+        envelope = min(index / 1200, 1.0) * min((sample_rate * duration_sec - index) / 1200, 1.0)
+        sample = int(18000 * envelope * math.sin(2 * math.pi * base_frequency * index / sample_rate))
+        frames.append(struct.pack("<h", sample))
+    wav.writeframes(b"".join(frames))
+
 preview = {{
     "title": brief["title"],
     "lyrics": lyrics,
-    "song_plan": song_plan,
+    "song_plan": {{**song_plan, "audio_preview": "audio_preview.wav"}},
     "safety_notes": safety_notes["checks"],
 }}
 files = [
@@ -130,12 +148,23 @@ for artifact_id, artifact_type, filename, mime_type, content in files:
         "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/" + filename,
         "public": False,
     }})
+audio_payload = audio_path.read_bytes()
+artifacts.append({{
+    "artifact_id": "audio_preview_wav",
+    "type": "audio_preview",
+    "filename": "audio_preview.wav",
+    "mime_type": "audio/wav",
+    "size_bytes": len(audio_payload),
+    "sha256": hashlib.sha256(audio_payload).hexdigest(),
+    "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/audio_preview.wav",
+    "public": False,
+}})
 worker_log = job_dir / "worker.log"
 worker_log.write_text(
     "\\n".join([
         "job=" + manifest["job_id"],
         "stage=" + manifest["stage"],
-        "artifacts=lyrics.txt,song_plan.json,safety_notes.json",
+        "artifacts=lyrics.txt,song_plan.json,safety_notes.json,audio_preview.wav",
         "storage=server",
     ]) + "\\n",
     encoding="utf-8",
@@ -157,6 +186,7 @@ output = {{
         "remote worker wrote lyrics.txt",
         "remote worker wrote song_plan.json",
         "remote worker wrote safety_notes.json",
+        "remote worker wrote audio_preview.wav",
     ],
     "log": {{
         "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/worker.log",

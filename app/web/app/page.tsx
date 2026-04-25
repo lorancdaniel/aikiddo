@@ -10,6 +10,7 @@ import {
   approveEpisodeSpec,
   approveStage,
   ArtifactInventoryItem,
+  buildApiUrl,
   ComplianceReportArtifact,
   createSeries,
   createProject,
@@ -884,26 +885,46 @@ export default function Home() {
                 ) : null}
                 {serverArtifacts.length ? (
                   <div className="grid gap-2">
-                    {serverArtifacts.map((artifact) => (
-                      <div key={artifact.artifact_id} className="rounded-xl bg-[var(--mist)] p-3 text-[var(--ink)]">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-black uppercase">{artifact.type}</p>
-                            <p className="mt-1 break-all text-sm font-black">{fileNameFromPath(artifact.filename)}</p>
+                    {serverArtifacts.map((artifact) => {
+                      const canPreview = artifact.mime_type.startsWith("text/") || artifact.mime_type === "application/json";
+                      const downloadUrl =
+                        selectedProject && remotePilotRun
+                          ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${remotePilotRun.id}/artifacts/${artifact.artifact_id}`)
+                          : "";
+
+                      return (
+                        <div key={artifact.artifact_id} className="rounded-xl bg-[var(--mist)] p-3 text-[var(--ink)]">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-black uppercase">{artifact.type}</p>
+                              <p className="mt-1 break-all text-sm font-black">{fileNameFromPath(artifact.filename)}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {canPreview ? (
+                                <button
+                                  className="rounded-full bg-[var(--ink)] px-3 py-1 text-xs font-black text-white transition hover:scale-[1.03]"
+                                  type="button"
+                                  onClick={() => handlePreviewArtifact(artifact)}
+                                >
+                                  Preview
+                                </button>
+                              ) : null}
+                              <a
+                                className="rounded-full border border-[var(--ink)]/20 px-3 py-1 text-xs font-black text-[var(--ink)] transition hover:bg-[var(--ink)] hover:text-white"
+                                href={downloadUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Download
+                              </a>
+                            </div>
                           </div>
-                          <button
-                            className="rounded-full bg-[var(--ink)] px-3 py-1 text-xs font-black text-white transition hover:scale-[1.03]"
-                            type="button"
-                            onClick={() => handlePreviewArtifact(artifact)}
-                          >
-                            Preview
-                          </button>
+                          <p className="mt-2 break-all text-xs font-semibold text-[var(--ink)]/58">
+                            {artifact.mime_type} · {artifact.size_bytes} bytes · {artifact.sha256.slice(0, 12)}
+                          </p>
                         </div>
-                        <p className="mt-2 break-all text-xs font-semibold text-[var(--ink)]/58">
-                          {artifact.mime_type} · {artifact.size_bytes} bytes · {artifact.sha256.slice(0, 12)}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : remotePilotRun.output_files.length ? (
                   <div className="grid gap-2">
