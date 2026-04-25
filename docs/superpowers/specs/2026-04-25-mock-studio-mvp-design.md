@@ -65,6 +65,8 @@ The mock `lyrics.generate` stage creates a reviewable `lyrics.json` artifact in 
 
 The mock `storyboard.generate` stage creates a reviewable `storyboard.json` artifact after the character and audio gates are complete. The artifact contains shot-by-shot scene descriptions, palette notes, camera language, and continuity constraints so the later keyframe/video stages can consume a stable creative brief. The cockpit promotes the storyboard artifact above lyrics once it exists, giving the operator the latest review target.
 
+The mock `keyframes.generate` stage creates a reviewable `keyframes.json` artifact after storyboard approval. Each frame maps back to a storyboard scene and includes timestamp, image prompt, composition, palette, and continuity notes. The cockpit promotes keyframes above storyboard once they exist so the operator always sees the next human review surface.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

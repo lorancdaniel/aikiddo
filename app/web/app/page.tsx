@@ -4,14 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
 import {
   approveStage,
   createProject,
+  fetchKeyframesArtifact,
   fetchProjects,
   fetchLyricsArtifact,
   fetchServerProfile,
   fetchStoryboardArtifact,
+  KeyframesArtifact,
   LyricsArtifact,
   Project,
   ProjectInput,
@@ -84,6 +86,7 @@ export default function Home() {
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
   const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
   const [storyboardArtifact, setStoryboardArtifact] = useState<StoryboardArtifact | null>(null);
+  const [keyframesArtifact, setKeyframesArtifact] = useState<KeyframesArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -201,6 +204,11 @@ export default function Home() {
     } catch {
       setStoryboardArtifact(null);
     }
+    try {
+      setKeyframesArtifact(await fetchKeyframesArtifact(projectId));
+    } catch {
+      setKeyframesArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -222,6 +230,7 @@ export default function Home() {
       setSelectedProject(created);
       setLyricsArtifact(null);
       setStoryboardArtifact(null);
+      setKeyframesArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -568,7 +577,53 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {storyboardArtifact ? (
+          {keyframesArtifact ? (
+            <div className="p-5 md:p-7" data-testid="keyframes-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Keyframes</h2>
+                  <p className="mt-2 text-sm text-white/52">{keyframesArtifact.topic} · {keyframesArtifact.age_range}</p>
+                </div>
+                <Images className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="grid gap-4">
+                {keyframesArtifact.frames.map((frame, index) => (
+                  <div key={frame.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-white/7">
+                    <div
+                      className="min-h-44 bg-cover bg-center p-4 transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+                      style={{
+                        backgroundImage:
+                          `linear-gradient(180deg, rgba(12,12,13,0.06), rgba(12,12,13,0.86)), url(https://picsum.photos/seed/${frame.id}-${frame.scene_id}/900/560)`
+                      }}
+                    >
+                      <p className="text-sm font-black text-[var(--acid)]">Klatka {index + 1} · {frame.timestamp_seconds}s</p>
+                      <p className="mt-20 max-w-sm text-xl font-black leading-tight">{frame.composition}</p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm font-black text-[var(--teal)]">Prompt obrazu</p>
+                      <p className="mt-2 text-sm leading-6 text-white/70">{frame.image_prompt}</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {frame.palette.map((color) => (
+                          <span key={`${frame.id}-${color}`} className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-xs text-white/60">
+                            {color}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="mt-3 text-xs text-white/45">{frame.continuity_note}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Spójność wizualna</p>
+                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                  {keyframesArtifact.consistency_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : storyboardArtifact ? (
             <div className="p-5 md:p-7" data-testid="storyboard-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

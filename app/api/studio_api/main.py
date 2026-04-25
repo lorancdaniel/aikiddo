@@ -8,6 +8,7 @@ from .mock_server import MockGpuServer
 from .models import (
     BriefInput,
     Job,
+    KeyframesArtifact,
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
@@ -104,6 +105,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             storage.save_lyrics(project_id, mock_server.generate_lyrics(project.brief))
         if stage == "storyboard.generate":
             storage.save_storyboard(project_id, mock_server.generate_storyboard(project.brief, storage.get_lyrics(project_id)))
+        if stage == "keyframes.generate":
+            storage.save_keyframes(project_id, mock_server.generate_keyframes(project.brief, storage.get_storyboard(project_id)))
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
@@ -168,6 +171,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if storyboard is None:
             raise HTTPException(status_code=404, detail="Storyboard artifact not found")
         return storyboard
+
+    @app.get("/api/projects/{project_id}/artifacts/keyframes", response_model=KeyframesArtifact)
+    def get_keyframes_artifact(project_id: str) -> KeyframesArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        keyframes = storage.get_keyframes(project_id)
+        if keyframes is None:
+            raise HTTPException(status_code=404, detail="Keyframes artifact not found")
+        return keyframes
 
     return app
 

@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from .models import HUMAN_REVIEW_STAGES, Brief, Job, LyricsArtifact, ServerConnection, ServerProfile, StageStatus, StoryboardArtifact, StoryboardScene, utc_now
+from .models import HUMAN_REVIEW_STAGES, Brief, Job, KeyframeFrame, KeyframesArtifact, LyricsArtifact, ServerConnection, ServerProfile, StageStatus, StoryboardArtifact, StoryboardScene, utc_now
 
 
 class MockGpuServer:
@@ -120,6 +120,33 @@ class MockGpuServer:
                 "Sceny są spokojne i czytelne dla wieku " + brief.age_range + ".",
                 "Brak przemocy, straszenia i niebezpiecznych zachowań.",
                 "Historia ma domknięcie i nie używa manipulacyjnych zachęt do oglądania.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_keyframes(self, brief: Brief, storyboard: StoryboardArtifact | None = None) -> KeyframesArtifact:
+        scenes = storyboard.scenes if storyboard else self.generate_storyboard(brief).scenes
+        frames = [
+            KeyframeFrame(
+                id=f"keyframe_{index + 1:02d}",
+                scene_id=scene.id,
+                timestamp_seconds=max(1, min(scene.duration_seconds - 1, scene.duration_seconds // 2)),
+                image_prompt=f"{scene.visual_prompt}, single polished keyframe, consistent character design, preschool-safe composition",
+                composition=scene.camera,
+                palette=["warm coral", "soft teal", "sunlit cream", "gentle violet"],
+                continuity_note=f"Keep the same hero proportions and soft expression from {scene.id}.",
+            )
+            for index, scene in enumerate(scenes)
+        ]
+        return KeyframesArtifact(
+            title=brief.title,
+            topic=brief.topic,
+            age_range=brief.age_range,
+            frames=frames,
+            consistency_notes=[
+                "Postać ma tę samą sylwetkę, proporcje i paletę w każdej klatce.",
+                "Światło pozostaje miękkie, bez ostrych kontrastów i migotania.",
+                "Kompozycje zostawiają bezpieczny margines dla napisów i ruchu kamery.",
             ],
             created_at=utc_now(),
         )

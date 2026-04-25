@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import Job, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, utc_now
+from .models import Job, KeyframesArtifact, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, utc_now
 
 
 class ProjectStorage:
@@ -73,6 +73,19 @@ class ProjectStorage:
         if not storyboard_file.exists():
             return None
         return StoryboardArtifact.model_validate_json(storyboard_file.read_text(encoding="utf-8"))
+
+    def save_keyframes(self, project_id: str, keyframes: KeyframesArtifact) -> KeyframesArtifact:
+        (self.project_dir(project_id) / "keyframes.json").write_text(
+            json.dumps(keyframes.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return keyframes
+
+    def get_keyframes(self, project_id: str) -> KeyframesArtifact | None:
+        keyframes_file = self.project_dir(project_id) / "keyframes.json"
+        if not keyframes_file.exists():
+            return None
+        return KeyframesArtifact.model_validate_json(keyframes_file.read_text(encoding="utf-8"))
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

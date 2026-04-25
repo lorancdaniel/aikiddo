@@ -97,6 +97,25 @@ class StoryboardArtifact(BaseModel):
     created_at: str
 
 
+class KeyframeFrame(BaseModel):
+    id: str
+    scene_id: str
+    timestamp_seconds: int
+    image_prompt: str
+    composition: str
+    palette: list[str]
+    continuity_note: str
+
+
+class KeyframesArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    frames: list[KeyframeFrame]
+    consistency_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

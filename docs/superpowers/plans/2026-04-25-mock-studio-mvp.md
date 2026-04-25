@@ -205,3 +205,20 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Add API access to the storyboard artifact.
 - [x] Render scene cards, camera notes, and continuity notes in the cockpit.
 - [x] Verify the artifact appears after brief, lyrics, character, and audio gates.
+
+### Follow-up Completed: Mock Keyframes Artifact
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Generate `keyframes.json` when `keyframes.generate` runs.
+- [x] Add API access to the keyframes artifact.
+- [x] Render keyframe cards, image prompts, palette chips, and continuity notes in the cockpit.
+- [x] Verify the artifact appears after storyboard approval.

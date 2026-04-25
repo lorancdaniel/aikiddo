@@ -90,6 +90,25 @@ export type StoryboardArtifact = {
   created_at: string;
 };
 
+export type KeyframeFrame = {
+  id: string;
+  scene_id: string;
+  timestamp_seconds: number;
+  image_prompt: string;
+  composition: string;
+  palette: string[];
+  continuity_note: string;
+};
+
+export type KeyframesArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  frames: KeyframeFrame[];
+  consistency_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -159,6 +178,10 @@ export function fetchLyricsArtifact(projectId: string) {
 
 export function fetchStoryboardArtifact(projectId: string) {
   return request<StoryboardArtifact>(`/api/projects/${projectId}/artifacts/storyboard`);
+}
+
+export function fetchKeyframesArtifact(projectId: string) {
+  return request<KeyframesArtifact>(`/api/projects/${projectId}/artifacts/keyframes`);
 }
 
 export function runStage(projectId: string, stage: string) {
