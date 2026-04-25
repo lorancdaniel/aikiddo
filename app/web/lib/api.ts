@@ -207,6 +207,36 @@ export type GenerationArtifact = {
   public: boolean;
 };
 
+export type GenerationArtifactView = GenerationArtifact & {
+  download_url: string;
+};
+
+export type GenerationPreview = {
+  title: string;
+  lyrics: string;
+  song_plan: Record<string, unknown>;
+  safety_notes: string[];
+};
+
+export type GenerationJobDetail = {
+  id: string;
+  job_id: string;
+  project_id: string;
+  stage: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  phase: string;
+  message: string;
+  adapter: "mock" | "ssh";
+  preview: GenerationPreview | null;
+  artifacts: GenerationArtifactView[];
+  log_url: string | null;
+  error: { code: string; message: string } | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+};
+
 export type RemotePilotRun = {
   id: string;
   project_id: string;
@@ -219,12 +249,7 @@ export type RemotePilotRun = {
   output_manifest_path: string;
   output_files: string[];
   artifacts: GenerationArtifact[];
-  preview: {
-    title: string;
-    lyrics: string;
-    song_plan: Record<string, unknown>;
-    safety_notes: string[];
-  } | null;
+  preview: GenerationPreview | null;
   message: string;
   logs: string[];
   created_at: string;
@@ -506,6 +531,10 @@ export function runRemotePilot(projectId: string, stage = "lyrics.generate") {
     method: "POST",
     body: JSON.stringify({ stage })
   });
+}
+
+export function fetchJobDetail(jobId: string) {
+  return request<GenerationJobDetail>(`/api/jobs/${jobId}`);
 }
 
 export function fetchJobArtifacts(projectId: string, jobId: string) {

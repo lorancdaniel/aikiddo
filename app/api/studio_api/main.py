@@ -15,6 +15,8 @@ from .models import (
     EpisodeSpecInput,
     FullEpisodeArtifact,
     GenerationArtifact,
+    GenerationArtifactView,
+    GenerationJobDetail,
     HUMAN_REVIEW_STAGES,
     Job,
     KeyframesArtifact,
@@ -118,9 +120,23 @@ def get_project_next_action(project: Project, anti_repetition_report: AntiRepeti
         action_type="done",
         stage=None,
         label="Pipeline",
-        message="Pipeline mock jest domknięty.",
+        message="Pipeline produkcyjny jest domknięty.",
         severity="info",
     )
+
+
+def normalize_job_status(status_value: StageStatus) -> tuple[str, str]:
+    if status_value == StageStatus.FAILED:
+        return "failed", "failed"
+    if status_value == StageStatus.RUNNING:
+        return "running", "running"
+    if status_value == StageStatus.QUEUED:
+        return "queued", "queued"
+    if status_value == StageStatus.PENDING:
+        return "queued", "created"
+    if status_value == StageStatus.NEEDS_REVIEW:
+        return "succeeded", "awaiting_review"
+    return "succeeded", "completed"
 
 
 def create_app(projects_root: Path | None = None) -> FastAPI:
@@ -476,6 +492,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             artifact, content = ssh_server.fetch_artifact(profile, run, artifact_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Artifact not found") from None
+        except ValueError:
+            raise HTTPException(status_code=502, detail="Artifact checksum mismatch") from None
         return Response(
             content=content,
             media_type=artifact.mime_type,
@@ -514,12 +532,43 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         )
         return storage.save_project(project)
 
-    @app.get("/api/jobs/{job_id}", response_model=Job)
-    def get_job(job_id: str) -> Job:
+    def build_generation_job_detail(job: Job) -> GenerationJobDetail:
+        normalized_status, phase = normalize_job_status(job.status)
+        run = storage.get_remote_pilot_run(job.project_id, job.id) if job.adapter == "ssh" else None
+        artifacts = [
+            GenerationArtifactView(
+                **artifact.model_dump(),
+                download_url=f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}",
+            )
+            for artifact in (run.artifacts if run is not None else [])
+        ]
+        error = {"code": "runner_failed", "message": job.message} if normalized_status == "failed" else None
+        finished_at = job.updated_at if normalized_status in {"succeeded", "failed", "cancelled"} else None
+        return GenerationJobDetail(
+            id=job.id,
+            job_id=job.id,
+            project_id=job.project_id,
+            stage=job.stage,
+            status=normalized_status,
+            phase=phase,
+            message=job.message,
+            adapter=job.adapter,
+            preview=run.preview if run is not None else None,
+            artifacts=artifacts,
+            log_url=f"/api/projects/{job.project_id}/jobs/{job.id}/log" if run is not None else None,
+            error=error,
+            created_at=job.created_at,
+            started_at=job.created_at if job.adapter == "ssh" else None,
+            finished_at=finished_at,
+            updated_at=job.updated_at,
+        )
+
+    @app.get("/api/jobs/{job_id}", response_model=GenerationJobDetail)
+    def get_job(job_id: str) -> GenerationJobDetail:
         job = storage.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        return job
+        return build_generation_job_detail(job)
 
     @app.get("/api/projects/{project_id}/artifacts/lyrics", response_model=LyricsArtifact)
     def get_lyrics_artifact(project_id: str) -> LyricsArtifact:

@@ -496,11 +496,34 @@ class GenerationArtifact(BaseModel):
     public: bool = False
 
 
+class GenerationArtifactView(GenerationArtifact):
+    download_url: str
+
+
 class GenerationPreview(BaseModel):
     title: str
     lyrics: str
     song_plan: dict
     safety_notes: list[str]
+
+
+class GenerationJobDetail(BaseModel):
+    id: str
+    job_id: str
+    project_id: str
+    stage: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    phase: str
+    message: str
+    adapter: Literal["mock", "ssh"]
+    preview: GenerationPreview | None = None
+    artifacts: list[GenerationArtifactView] = Field(default_factory=list)
+    log_url: str | None = None
+    error: dict | None = None
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str
 
 
 class RemotePilotRun(BaseModel):

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import shlex
 import subprocess
 from uuid import uuid4
@@ -232,6 +233,9 @@ PY
         )
         if result.returncode != 0:
             raise FileNotFoundError(artifact_id)
+        digest = hashlib.sha256(result.stdout).hexdigest()
+        if digest != artifact.sha256:
+            raise ValueError(artifact_id)
         return artifact, result.stdout
 
     def fetch_log(self, profile: ServerProfile, run: RemotePilotRun) -> str:

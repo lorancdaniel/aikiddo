@@ -19,6 +19,7 @@ import {
   fetchFullEpisodeArtifact,
   fetchJobArtifactText,
   fetchJobArtifacts,
+  fetchJobDetail,
   fetchJobLog,
   fetchKeyframesArtifact,
   fetchProjectApprovals,
@@ -36,6 +37,7 @@ import {
   fetchVideoScenesArtifact,
   FullEpisodeArtifact,
   GenerationArtifact,
+  GenerationJobDetail,
   Job,
   JobLog,
   KeyframesArtifact,
@@ -206,6 +208,7 @@ export default function Home() {
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [antiRepetitionReport, setAntiRepetitionReport] = useState<AntiRepetitionReport | null>(null);
   const [remotePilotRun, setRemotePilotRun] = useState<RemotePilotRun | null>(null);
+  const [serverJobDetail, setServerJobDetail] = useState<GenerationJobDetail | null>(null);
   const [serverArtifacts, setServerArtifacts] = useState<GenerationArtifact[]>([]);
   const [serverLog, setServerLog] = useState<JobLog | null>(null);
   const [artifactPreview, setArtifactPreview] = useState<{ artifactId: string; content: string } | null>(null);
@@ -323,6 +326,23 @@ export default function Home() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!remotePilotRun) return;
+    if (serverJobDetail?.status !== "queued" && serverJobDetail?.status !== "running") return;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const jobDetail = await fetchJobDetail(remotePilotRun.id);
+        setServerJobDetail(jobDetail);
+        setServerArtifacts(jobDetail.artifacts);
+      } catch {
+        window.clearInterval(interval);
+      }
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [remotePilotRun, serverJobDetail?.status]);
+
   const selectedSummary = useMemo(() => {
     if (!selectedProject) return "Brak projektu";
     return `${selectedProject.brief.topic} · ${selectedProject.brief.age_range} · ${selectedProject.brief.emotional_tone}`;
@@ -399,6 +419,13 @@ export default function Home() {
       const remoteRun = await fetchRemotePilot(projectId);
       setRemotePilotRun(remoteRun);
       try {
+        const jobDetail = await fetchJobDetail(remoteRun.id);
+        setServerJobDetail(jobDetail);
+        setServerArtifacts(jobDetail.artifacts);
+      } catch {
+        setServerJobDetail(null);
+      }
+      try {
         setServerArtifacts(await fetchJobArtifacts(projectId, remoteRun.id));
       } catch {
         setServerArtifacts(remoteRun.artifacts);
@@ -410,6 +437,7 @@ export default function Home() {
       }
     } catch {
       setRemotePilotRun(null);
+      setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
       setArtifactPreview(null);
@@ -464,6 +492,7 @@ export default function Home() {
       setPublishPackageArtifact(null);
       setAntiRepetitionReport(null);
       setRemotePilotRun(null);
+      setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
       setArtifactPreview(null);
@@ -813,8 +842,8 @@ export default function Home() {
                     : "Zapisz profil serwera, żeby uruchamiać generacje."}
                 </p>
               </div>
-              <span className={`status-pill ${remotePilotRun?.status === "failed" ? "bg-[var(--coral)] text-white" : "bg-white/10 text-white/70"}`}>
-                {remotePilotRun?.status ?? "idle"}
+              <span className={`status-pill ${serverJobDetail?.status === "failed" || remotePilotRun?.status === "failed" ? "bg-[var(--coral)] text-white" : "bg-white/10 text-white/70"}`}>
+                {serverJobDetail?.status ?? remotePilotRun?.status ?? "idle"}
               </span>
             </div>
             <button
@@ -831,15 +860,21 @@ export default function Home() {
                 <div className="rounded-xl bg-white/7 p-3">
                   <p className="font-black text-white">Job</p>
                   <p className="mt-1 break-all text-xs text-white/48">{remotePilotRun.id}</p>
+                  {serverJobDetail ? <p className="mt-2 text-xs font-bold text-white/42">{serverJobDetail.phase}</p> : null}
+                  {serverJobDetail?.error ? (
+                    <p className="mt-2 rounded-lg bg-[var(--coral)]/18 px-2 py-1 text-xs font-bold text-[var(--coral)]">
+                      {serverJobDetail.error.message}
+                    </p>
+                  ) : null}
                 </div>
-                {remotePilotRun.preview ? (
+                {(serverJobDetail?.preview ?? remotePilotRun.preview) ? (
                   <div className="rounded-xl border border-white/10 bg-white/7 p-3" data-testid="server-preview">
-                    <p className="font-black text-white">{remotePilotRun.preview.title}</p>
+                    <p className="font-black text-white">{(serverJobDetail?.preview ?? remotePilotRun.preview)?.title}</p>
                     <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-white/62">
-                      {remotePilotRun.preview.lyrics}
+                      {(serverJobDetail?.preview ?? remotePilotRun.preview)?.lyrics}
                     </pre>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {remotePilotRun.preview.safety_notes.map((note) => (
+                      {(serverJobDetail?.preview ?? remotePilotRun.preview)?.safety_notes.map((note) => (
                         <span key={note} className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white/62">
                           {note}
                         </span>

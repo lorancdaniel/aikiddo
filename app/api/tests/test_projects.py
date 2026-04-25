@@ -105,7 +105,7 @@ def remote_output_fixture(project_id: str, stage: str = "lyrics.generate") -> di
                 "filename": "lyrics.txt",
                 "mime_type": "text/plain",
                 "size_bytes": 42,
-                "sha256": "sha-lyrics",
+                "sha256": "7fd5f87915ff579eb9909bbc9d11f5de96910160f7b24719288346c7f1f2d57c",
                 "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/lyrics.txt",
                 "public": False,
             },
@@ -338,6 +338,7 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     artifacts = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/artifacts")
     log_response = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/log")
     artifact_response = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/artifacts/lyrics_txt")
+    job_detail_response = client.get(f"/api/jobs/{job['id']}")
 
     assert artifacts.status_code == 200
     assert [artifact["artifact_id"] for artifact in artifacts.json()] == ["lyrics_txt", "song_plan_json", "safety_notes_json"]
@@ -346,7 +347,18 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     assert "storage=server" in log_response.json()["log"]
     assert artifact_response.status_code == 200
     assert artifact_response.text == "Colors in the rhythm\n"
-    assert artifact_response.headers["x-artifact-sha256"] == "sha-lyrics"
+    assert artifact_response.headers["x-artifact-sha256"] == "7fd5f87915ff579eb9909bbc9d11f5de96910160f7b24719288346c7f1f2d57c"
+    assert job_detail_response.status_code == 200
+    job_detail = job_detail_response.json()
+    assert job_detail["id"] == job["id"]
+    assert job_detail["status"] == "succeeded"
+    assert job_detail["phase"] == "awaiting_review"
+    assert job_detail["preview"]["lyrics"] == "Colors in the rhythm\n"
+    assert job_detail["artifacts"][0]["download_url"].endswith(f"/jobs/{job['id']}/artifacts/lyrics_txt")
+    assert job_detail["log_url"].endswith(f"/jobs/{job['id']}/log")
+    assert job_detail["error"] is None
+    assert job_detail["started_at"] == job_detail["created_at"]
+    assert job_detail["finished_at"] == job_detail["updated_at"]
 
 
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:
