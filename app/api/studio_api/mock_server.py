@@ -1,16 +1,20 @@
 from uuid import uuid4
 
-from .models import HUMAN_REVIEW_STAGES, Job, ServerConnection, StageStatus, utc_now
+from .models import HUMAN_REVIEW_STAGES, Job, ServerConnection, ServerProfile, StageStatus, utc_now
 
 
 class MockGpuServer:
     adapter = "mock"
 
-    def test_connection(self) -> ServerConnection:
+    def test_connection(self, profile: ServerProfile | None = None) -> ServerConnection:
+        if profile is not None:
+            message = f"Mock GPU server profile '{profile.label}' is ready for local development."
+        else:
+            message = "Mock GPU server is ready for local development."
         return ServerConnection(
             mode="mock",
             reachable=True,
-            message="Mock GPU server is ready for local development.",
+            message=message,
         )
 
     def submit_job(self, project_id: str, stage: str) -> Job:

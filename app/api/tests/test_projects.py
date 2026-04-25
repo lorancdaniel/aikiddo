@@ -64,6 +64,66 @@ def test_mock_server_connection_is_ready(tmp_path: Path) -> None:
     }
 
 
+def test_server_profile_can_be_saved_and_loaded(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    save_response = client.put(
+        "/api/server/profile",
+        json={
+            "mode": "mock",
+            "label": "GPU tower draft",
+            "host": "gpu-studio.tailnet.local",
+            "username": "studio",
+            "port": 22,
+            "remote_root": "/srv/ai-kids-studio",
+            "ssh_key_path": "~/.ssh/ai_kids_studio",
+            "tailscale_name": "gpu-studio",
+        },
+    )
+
+    assert save_response.status_code == 200
+    profile = save_response.json()
+    assert profile["label"] == "GPU tower draft"
+    assert profile["host"] == "gpu-studio.tailnet.local"
+    assert profile["remote_root"] == "/srv/ai-kids-studio"
+    assert profile["updated_at"]
+
+    loaded_response = client.get("/api/server/profile")
+    assert loaded_response.status_code == 200
+    assert loaded_response.json() == profile
+
+    config_file = tmp_path / "projects" / ".studio" / "server-profile.json"
+    saved = json.loads(config_file.read_text())
+    assert saved["username"] == "studio"
+    assert "password" not in saved
+
+
+def test_mock_connection_uses_saved_server_profile(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "mock",
+            "label": "GPU tower draft",
+            "host": "gpu-studio.tailnet.local",
+            "username": "studio",
+            "port": 22,
+            "remote_root": "/srv/ai-kids-studio",
+            "ssh_key_path": "~/.ssh/ai_kids_studio",
+            "tailscale_name": "gpu-studio",
+        },
+    )
+
+    response = client.post("/api/server/test-connection")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mode": "mock",
+        "reachable": True,
+        "message": "Mock GPU server profile 'GPU tower draft' is ready for local development.",
+    }
+
+
 def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

@@ -98,6 +98,21 @@ class ServerConnection(BaseModel):
     message: str
 
 
+class ServerProfileInput(BaseModel):
+    mode: Literal["mock", "ssh"] = "mock"
+    label: str = Field(min_length=1, max_length=80)
+    host: str = Field(min_length=1, max_length=180)
+    username: str = Field(min_length=1, max_length=80)
+    port: int = Field(ge=1, le=65535)
+    remote_root: str = Field(min_length=1, max_length=240)
+    ssh_key_path: str = Field(min_length=1, max_length=240)
+    tailscale_name: str = Field(min_length=1, max_length=120)
+
+
+class ServerProfile(ServerProfileInput):
+    updated_at: str
+
+
 def create_project_from_brief(brief_input: BriefInput) -> Project:
     now = utc_now()
     project_id = f"project_{uuid4().hex[:12]}"

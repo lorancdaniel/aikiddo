@@ -124,3 +124,20 @@ Expected: PASS.
 - [ ] **Step 4: Verify in Browser Use**
 
 Open `http://localhost:3000`, inspect the UI visually, create a project, and trigger a mock job.
+
+### Follow-up Completed: Local Server Profile
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Add a local server profile model for future SSH/Tailscale configuration.
+- [x] Persist the profile to `projects/.studio/server-profile.json`.
+- [x] Keep credential contents out of the profile.
+- [x] Show and save the profile from the cockpit UI.
+- [x] Make Playwright e2e use isolated ports and an isolated data directory.

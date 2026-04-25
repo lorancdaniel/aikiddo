@@ -1,15 +1,27 @@
 from pathlib import Path
+import os
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .mock_server import MockGpuServer
-from .models import BriefInput, Job, PIPELINE_STAGES, Project, create_project_from_brief, utc_now
+from .models import (
+    BriefInput,
+    Job,
+    PIPELINE_STAGES,
+    Project,
+    ServerProfile,
+    ServerProfileInput,
+    create_project_from_brief,
+    utc_now,
+)
 from .storage import ProjectStorage
 
 
 def create_app(projects_root: Path | None = None) -> FastAPI:
-    storage = ProjectStorage(projects_root or Path(__file__).resolve().parents[3] / "projects")
+    configured_root = os.getenv("STUDIO_PROJECTS_ROOT")
+    default_root = Path(configured_root) if configured_root else Path(__file__).resolve().parents[3] / "projects"
+    storage = ProjectStorage(projects_root or default_root)
     mock_server = MockGpuServer()
 
     app = FastAPI(title="AI Kids Music Studio API", version="0.1.0")
@@ -20,6 +32,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             "http://127.0.0.1:3000",
             "http://localhost:3010",
             "http://127.0.0.1:3010",
+            "http://localhost:3020",
+            "http://127.0.0.1:3020",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -48,7 +62,18 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
     @app.post("/api/server/test-connection")
     def test_server_connection():
-        return mock_server.test_connection()
+        return mock_server.test_connection(storage.get_server_profile())
+
+    @app.get("/api/server/profile", response_model=ServerProfile)
+    def get_server_profile() -> ServerProfile:
+        profile = storage.get_server_profile()
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Server profile not found")
+        return profile
+
+    @app.put("/api/server/profile", response_model=ServerProfile)
+    def save_server_profile(profile_input: ServerProfileInput) -> ServerProfile:
+        return storage.save_server_profile(profile_input)
 
     @app.post("/api/projects/{project_id}/jobs/{stage}", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
     def submit_job(project_id: str, stage: str) -> Job:

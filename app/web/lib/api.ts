@@ -45,6 +45,20 @@ export type ServerConnection = {
   message: string;
 };
 
+export type ServerProfile = {
+  mode: "mock" | "ssh";
+  label: string;
+  host: string;
+  username: string;
+  port: number;
+  remote_root: string;
+  ssh_key_path: string;
+  tailscale_name: string;
+  updated_at: string;
+};
+
+export type ServerProfileInput = Omit<ServerProfile, "updated_at">;
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -87,6 +101,17 @@ export function createProject(input: ProjectInput) {
 export function testServerConnection() {
   return request<ServerConnection>("/api/server/test-connection", {
     method: "POST"
+  });
+}
+
+export function fetchServerProfile() {
+  return request<ServerProfile>("/api/server/profile");
+}
+
+export function saveServerProfile(input: ServerProfileInput) {
+  return request<ServerProfile>("/api/server/profile", {
+    method: "PUT",
+    body: JSON.stringify(input)
   });
 }
 

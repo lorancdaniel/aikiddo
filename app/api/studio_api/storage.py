@@ -1,13 +1,14 @@
 import json
 from pathlib import Path
 
-from .models import Job, Project, utc_now
+from .models import Job, Project, ServerProfile, ServerProfileInput, utc_now
 
 
 class ProjectStorage:
     def __init__(self, projects_root: Path) -> None:
         self.projects_root = projects_root
         self.projects_root.mkdir(parents=True, exist_ok=True)
+        self.studio_dir = self.projects_root / ".studio"
 
     def project_dir(self, project_id: str) -> Path:
         return self.projects_root / project_id
@@ -52,3 +53,18 @@ class ProjectStorage:
         if not matches:
             return None
         return Job.model_validate_json(matches[0].read_text(encoding="utf-8"))
+
+    def save_server_profile(self, profile_input: ServerProfileInput) -> ServerProfile:
+        self.studio_dir.mkdir(parents=True, exist_ok=True)
+        profile = ServerProfile(updated_at=utc_now(), **profile_input.model_dump())
+        (self.studio_dir / "server-profile.json").write_text(
+            json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return profile
+
+    def get_server_profile(self) -> ServerProfile | None:
+        profile_file = self.studio_dir / "server-profile.json"
+        if not profile_file.exists():
+            return None
+        return ServerProfile.model_validate_json(profile_file.read_text(encoding="utf-8"))

@@ -4,22 +4,22 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
-import { createProject, fetchProjects, Project, ProjectInput, runStage, ServerConnection, testServerConnection } from "../lib/api";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
+import {
+  createProject,
+  fetchProjects,
+  fetchServerProfile,
+  Project,
+  ProjectInput,
+  runStage,
+  saveServerProfile,
+  ServerConnection,
+  ServerProfile,
+  ServerProfileInput,
+  testServerConnection
+} from "../lib/api";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
-
-const initialForm: ProjectInput = {
-  title: "",
-  topic: "",
-  age_range: "3-5",
-  emotional_tone: "radość",
-  educational_goal: "",
-  characters: ""
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-};
 
 const stageLabels: Record<string, string> = {
   "brief.generate": "Brief",
@@ -63,6 +63,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [connection, setConnection] = useState<ServerConnection | null>(null);
+  const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -71,19 +72,51 @@ export default function Home() {
     educational_goal: "",
     characters: "toothbrush_friend_v1"
   });
+  const [serverForm, setServerForm] = useState<ServerProfileInput>({
+    mode: "mock",
+    label: "GPU tower draft",
+    host: "gpu-studio.tailnet.local",
+    username: "studio",
+    port: 22,
+    remote_root: "/srv/ai-kids-studio",
+    ssh_key_path: "~/.ssh/ai_kids_studio",
+    tailscale_name: "gpu-studio"
+  });
   const [jobMessage, setJobMessage] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [isSavingServer, setIsSavingServer] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([fetchProjects(), testServerConnection()])
-      .then(([projectList, server]) => {
+    async function loadStudio() {
+      try {
+        const [projectList, server] = await Promise.all([fetchProjects(), testServerConnection()]);
         setProjects(projectList);
         setSelectedProject(projectList[0] ?? null);
         setConnection(server);
-      })
-      .catch((caught: Error) => setError(caught.message));
+        try {
+          const profile = await fetchServerProfile();
+          setServerProfile(profile);
+          setServerForm({
+            mode: profile.mode,
+            label: profile.label,
+            host: profile.host,
+            username: profile.username,
+            port: profile.port,
+            remote_root: profile.remote_root,
+            ssh_key_path: profile.ssh_key_path,
+            tailscale_name: profile.tailscale_name
+          });
+        } catch {
+          setServerProfile(null);
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Nie udało się wczytać studia.");
+      }
+    }
+
+    loadStudio();
   }, []);
 
   useGSAP(() => {
@@ -172,6 +205,23 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleSaveServerProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingServer(true);
+    setError("");
+
+    try {
+      const saved = await saveServerProfile(serverForm);
+      setServerProfile(saved);
+      const server = await testServerConnection();
+      setConnection(server);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się zapisać profilu serwera.");
+    } finally {
+      setIsSavingServer(false);
     }
   }
 
@@ -294,17 +344,65 @@ export default function Home() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-2xl font-black">Serwer GPU</h2>
-              <p className="mt-1 text-sm text-white/52">{connection?.mode ?? "mock"}</p>
+              <p className="mt-1 text-sm text-white/52">{serverProfile?.label ?? "profil roboczy"}</p>
             </div>
             <Activity className="text-[var(--teal)]" size={24} />
           </div>
-          <div className="mt-10 rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
+          <div className="mt-6 rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
             <p className="text-sm font-bold">{connection?.message ?? "Łączenie z mock serwerem..."}</p>
             <p className="mt-5 text-5xl font-black">{connection?.reachable ? "ready" : "wait"}</p>
           </div>
-          <div className="mt-6 flex items-center gap-2 text-sm text-white/58">
+          <form className="mt-5 grid gap-3" onSubmit={handleSaveServerProfile}>
+            <label className="grid gap-2 text-sm text-white/70">
+              Nazwa profilu
+              <input className="field" required value={serverForm.label} onChange={(event) => setServerForm({ ...serverForm, label: event.target.value })} />
+            </label>
+            <label className="grid gap-2 text-sm text-white/70">
+              Host
+              <input className="field" required value={serverForm.host} onChange={(event) => setServerForm({ ...serverForm, host: event.target.value })} />
+            </label>
+            <div className="grid gap-3 md:grid-cols-[1fr_0.55fr]">
+              <label className="grid gap-2 text-sm text-white/70">
+                Użytkownik SSH
+                <input className="field" required value={serverForm.username} onChange={(event) => setServerForm({ ...serverForm, username: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm text-white/70">
+                Port
+                <input
+                  className="field"
+                  required
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={serverForm.port}
+                  onChange={(event) => setServerForm({ ...serverForm, port: Number(event.target.value) })}
+                />
+              </label>
+            </div>
+            <label className="grid gap-2 text-sm text-white/70">
+              Remote root
+              <input className="field" required value={serverForm.remote_root} onChange={(event) => setServerForm({ ...serverForm, remote_root: event.target.value })} />
+            </label>
+            <label className="grid gap-2 text-sm text-white/70">
+              Ścieżka klucza
+              <input className="field" required value={serverForm.ssh_key_path} onChange={(event) => setServerForm({ ...serverForm, ssh_key_path: event.target.value })} />
+            </label>
+            <label className="grid gap-2 text-sm text-white/70">
+              Tailscale
+              <input className="field" required value={serverForm.tailscale_name} onChange={(event) => setServerForm({ ...serverForm, tailscale_name: event.target.value })} />
+            </label>
+            <button
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--acid)] px-4 py-3 font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+              type="submit"
+              disabled={isSavingServer}
+            >
+              {isSavingServer ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={18} />}
+              Zapisz profil
+            </button>
+          </form>
+          <div className="mt-5 flex items-center gap-2 text-sm text-white/58">
             <Server size={16} />
-            SSH adapter zostanie podpięty pod ten sam kontrakt.
+            Hasła i zawartość kluczy nie są zapisywane.
           </div>
         </article>
 

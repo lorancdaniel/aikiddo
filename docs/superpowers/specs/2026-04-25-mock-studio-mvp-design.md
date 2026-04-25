@@ -38,6 +38,7 @@ The first screen is the actual studio cockpit, not a marketing landing page. It 
 - selected project detail area;
 - pipeline stage board;
 - mock server status;
+- local server profile form for the future GPU host;
 - action buttons for running mock stages.
 
 The UI follows the requested `gpt-taste` direction for premium visual quality, but adapts it to an operational studio tool: rich, cinematic, and polished without turning the product into a generic landing page.
@@ -52,6 +53,8 @@ The backend will later gain an SSH adapter with the same methods as the mock ada
 - `sync_artifacts(project_id)`.
 
 Tailscale and SSH configuration will be added after the Linux GPU server exists. The current mock adapter deliberately mirrors that boundary.
+
+The first MVP already stores a local server profile in `projects/.studio/server-profile.json`. This profile contains only connection metadata: mode, label, host, username, port, remote root, SSH key path, and Tailscale name. It does not store passwords, private key contents, tokens, or other credentials.
 
 ## Testing
 
