@@ -14,6 +14,9 @@ chmod 600 "$HOME/.ssh/authorized_keys"
 if ! grep -qxF "$MAC_PUBLIC_KEY" "$HOME/.ssh/authorized_keys"; then
   echo "$MAC_PUBLIC_KEY" >> "$HOME/.ssh/authorized_keys"
 fi
+if command -v sudo >/dev/null 2>&1; then
+  sudo chown -R "$(id -un):$(id -gn)" "$HOME/.ssh"
+fi
 
 echo "==> Installing system dependencies"
 sudo apt update

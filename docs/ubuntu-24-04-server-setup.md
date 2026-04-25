@@ -32,7 +32,41 @@ ssh <ubuntu-user>@100.121.224.29 'hostname && whoami'
 
 Replace `<ubuntu-user>` with the value printed by `whoami` on the server.
 
-## 2. One-Shot Bootstrap
+## 2. Current SSH Fix For User `daniel`
+
+Codex can currently reach the server over Tailscale, and SSH port `22` is open, but login is rejected with:
+
+```text
+Permission denied (publickey,password)
+```
+
+Run this on the Ubuntu server to explicitly authorize the Mac key for user `daniel`:
+
+```bash
+sudo mkdir -p /home/daniel/.ssh
+sudo touch /home/daniel/.ssh/authorized_keys
+grep -qxF 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJlSRasQdCxb7ML6Cdijytf/3rV6UAUYls6yjlwRO9GK lorancdan@gmail.com' /home/daniel/.ssh/authorized_keys || echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJlSRasQdCxb7ML6Cdijytf/3rV6UAUYls6yjlwRO9GK lorancdan@gmail.com' | sudo tee -a /home/daniel/.ssh/authorized_keys
+sudo chown -R daniel:daniel /home/daniel/.ssh
+sudo chmod 700 /home/daniel/.ssh
+sudo chmod 600 /home/daniel/.ssh/authorized_keys
+sudo systemctl status ssh --no-pager
+```
+
+Verify locally on Ubuntu:
+
+```bash
+whoami
+grep 'lorancdan@gmail.com' /home/daniel/.ssh/authorized_keys
+ls -la /home/daniel/.ssh
+```
+
+Then ask Codex to retry:
+
+```bash
+ssh daniel@100.121.224.29 'whoami && hostname && pwd'
+```
+
+## 3. One-Shot Bootstrap
 
 On Ubuntu:
 
@@ -51,7 +85,7 @@ chmod +x scripts/bootstrap_ubuntu_24_04.sh
 ./scripts/bootstrap_ubuntu_24_04.sh
 ```
 
-## 3. Manual Commands If Needed
+## 4. Manual Commands If Needed
 
 Install system dependencies:
 
@@ -90,7 +124,7 @@ npm run build
 npm run test:e2e
 ```
 
-## 4. Run Mock App
+## 5. Run Mock App
 
 Terminal 1, backend:
 
@@ -113,7 +147,7 @@ Open from another machine on the Tailnet:
 http://100.121.224.29:3010
 ```
 
-## 5. Codex Handoff Prompt
+## 6. Codex Handoff Prompt
 
 After installing Codex on Ubuntu, run `codex` in `~/aikiddo` and paste:
 
@@ -141,4 +175,3 @@ Do:
 6. If asked to make services, create systemd units only after the app works manually.
 7. Report exact commands, ports, and any blockers.
 ```
-
