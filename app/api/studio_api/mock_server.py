@@ -10,6 +10,7 @@ from .models import (
     KeyframeFrame,
     KeyframesArtifact,
     LyricsArtifact,
+    PublishPackageArtifact,
     ReelClip,
     ReelsArtifact,
     ServerConnection,
@@ -336,6 +337,50 @@ class MockGpuServer:
                 "Raport jest gotowy do ludzkiej akceptacji przed przygotowaniem paczki publikacyjnej.",
                 "Mock nie analizuje prawdziwych pikseli ani audio; sprawdza kontrakty manifestów.",
                 "Adapter SSH powinien później podmienić tę sekcję na walidację realnych plików renderu.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_publish_package(
+        self,
+        brief: Brief,
+        episode: FullEpisodeArtifact | None = None,
+        reels: ReelsArtifact | None = None,
+        compliance_report: ComplianceReportArtifact | None = None,
+    ) -> PublishPackageArtifact:
+        episode_slug = episode.episode_slug if episode else _slugify(brief.title)
+        episode_output_path = episode.output_path if episode else f"renders/{episode_slug}/full-episode.mp4"
+        reel_output_paths = [reel.output_path for reel in reels.reels] if reels else [f"renders/{episode_slug}/reel-01.mp4"]
+        included_manifests = [
+            "brief.json",
+            "lyrics.json",
+            "storyboard.json",
+            "keyframes.json",
+            "video-scenes.json",
+            "full-episode.json",
+            "reels.json",
+        ]
+        if compliance_report is not None:
+            included_manifests.append("compliance-report.json")
+        return PublishPackageArtifact(
+            title=brief.title,
+            topic=brief.topic,
+            age_range=brief.age_range,
+            package_status="ready",
+            package_path=f"publish/{episode_slug}",
+            episode_output_path=episode_output_path,
+            reel_output_paths=reel_output_paths,
+            included_manifests=included_manifests,
+            publishing_metadata={
+                "audience": brief.age_range,
+                "topic": brief.topic,
+                "tone": brief.emotional_tone,
+                "title": brief.title,
+            },
+            operator_checklist=[
+                "Sprawdź tytuł, opis i miniaturę przed publikacją.",
+                "Upewnij się, że finalne pliki renderu istnieją na serwerze GPU.",
+                "Zachowaj raport jakości w paczce publikacyjnej.",
             ],
             created_at=utc_now(),
         )

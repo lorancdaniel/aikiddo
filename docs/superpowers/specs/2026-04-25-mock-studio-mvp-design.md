@@ -75,6 +75,8 @@ The mock `render.reels` stage creates a completed `reels.json` manifest after th
 
 The mock `quality.compliance_report` stage creates a reviewable `compliance-report.json` artifact after reels are rendered. The report summarizes language, sensory pacing, story completion, and distribution checks, links back to the full episode and reel output paths, and records operator notes for the later real-file validation pass. Because this stage is human-gated, it remains `needs_review` until the operator approves it.
 
+The mock `publish.prepare_package` stage creates a completed `publish-package.json` artifact after compliance approval. The package manifest records the publish folder path, episode and reel outputs, included manifests, publishing metadata, and a final operator checklist. This closes the mock pipeline with a stable handoff contract for the future real packaging worker.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

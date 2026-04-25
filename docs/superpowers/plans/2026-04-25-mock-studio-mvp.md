@@ -291,3 +291,20 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Add API access to the compliance artifact.
 - [x] Render checks, linked output paths, and operator notes in the cockpit.
 - [x] Verify the artifact appears after reels render and can be approved.
+
+### Follow-up Completed: Mock Publish Package
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Generate `publish-package.json` when `publish.prepare_package` runs.
+- [x] Add API access to the publish package artifact.
+- [x] Render package status, output paths, manifests, metadata, and checklist in the cockpit.
+- [x] Verify the artifact appears after compliance approval.

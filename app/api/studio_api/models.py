@@ -190,6 +190,20 @@ class ComplianceReportArtifact(BaseModel):
     created_at: str
 
 
+class PublishPackageArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    package_status: Literal["ready"]
+    package_path: str
+    episode_output_path: str
+    reel_output_paths: list[str]
+    included_manifests: list[str]
+    publishing_metadata: dict[str, str]
+    operator_checklist: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

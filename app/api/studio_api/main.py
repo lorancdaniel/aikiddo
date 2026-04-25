@@ -14,6 +14,7 @@ from .models import (
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
+    PublishPackageArtifact,
     ReelsArtifact,
     ServerProfile,
     ServerProfileInput,
@@ -121,6 +122,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             storage.save_compliance_report(
                 project_id,
                 mock_server.generate_compliance_report(project.brief, storage.get_full_episode(project_id), storage.get_reels(project_id)),
+            )
+        if stage == "publish.prepare_package":
+            storage.save_publish_package(
+                project_id,
+                mock_server.generate_publish_package(
+                    project.brief,
+                    storage.get_full_episode(project_id),
+                    storage.get_reels(project_id),
+                    storage.get_compliance_report(project_id),
+                ),
             )
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
@@ -236,6 +247,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if report is None:
             raise HTTPException(status_code=404, detail="Compliance report artifact not found")
         return report
+
+    @app.get("/api/projects/{project_id}/artifacts/publish-package", response_model=PublishPackageArtifact)
+    def get_publish_package_artifact(project_id: str) -> PublishPackageArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        package = storage.get_publish_package(project_id)
+        if package is None:
+            raise HTTPException(status_code=404, detail="Publish package artifact not found")
+        return package
 
     return app
 

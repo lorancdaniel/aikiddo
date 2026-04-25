@@ -183,6 +183,20 @@ export type ComplianceReportArtifact = {
   created_at: string;
 };
 
+export type PublishPackageArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  package_status: "ready";
+  package_path: string;
+  episode_output_path: string;
+  reel_output_paths: string[];
+  included_manifests: string[];
+  publishing_metadata: Record<string, string>;
+  operator_checklist: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -272,6 +286,10 @@ export function fetchReelsArtifact(projectId: string) {
 
 export function fetchComplianceReportArtifact(projectId: string) {
   return request<ComplianceReportArtifact>(`/api/projects/${projectId}/artifacts/compliance-report`);
+}
+
+export function fetchPublishPackageArtifact(projectId: string) {
+  return request<PublishPackageArtifact>(`/api/projects/${projectId}/artifacts/publish-package`);
 }
 
 export function runStage(projectId: string, stage: string) {

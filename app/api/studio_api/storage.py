@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
 
 
 class ProjectStorage:
@@ -138,6 +138,19 @@ class ProjectStorage:
         if not report_file.exists():
             return None
         return ComplianceReportArtifact.model_validate_json(report_file.read_text(encoding="utf-8"))
+
+    def save_publish_package(self, project_id: str, package: PublishPackageArtifact) -> PublishPackageArtifact:
+        (self.project_dir(project_id) / "publish-package.json").write_text(
+            json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return package
+
+    def get_publish_package(self, project_id: str) -> PublishPackageArtifact | None:
+        package_file = self.project_dir(project_id) / "publish-package.json"
+        if not package_file.exists():
+            return None
+        return PublishPackageArtifact.model_validate_json(package_file.read_text(encoding="utf-8"))
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

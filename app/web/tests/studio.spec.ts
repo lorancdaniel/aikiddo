@@ -85,4 +85,10 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await expect(page.getByTestId("compliance-report-artifact")).toContainText("Gotowy");
   await page.getByTestId("approve-quality.compliance_report").click();
   await expect(page.getByTestId("stage-quality.compliance_report")).toContainText("gotowe");
+
+  await page.getByTestId("run-publish.prepare_package").click();
+  await expect(page.getByTestId("stage-publish.prepare_package")).toContainText("gotowe");
+  await expect(page.getByTestId("publish-package-artifact")).toContainText("Paczka publikacji");
+  await expect(page.getByTestId("publish-package-artifact")).toContainText("publish/");
+  await expect(page.getByTestId("publish-package-artifact")).toContainText("compliance-report.json");
 });

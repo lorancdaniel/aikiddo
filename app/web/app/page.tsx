@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
 import {
   approveStage,
   ComplianceReportArtifact,
@@ -12,6 +12,7 @@ import {
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
+  fetchPublishPackageArtifact,
   fetchProjects,
   fetchLyricsArtifact,
   fetchReelsArtifact,
@@ -23,6 +24,7 @@ import {
   LyricsArtifact,
   Project,
   ProjectInput,
+  PublishPackageArtifact,
   ReelsArtifact,
   runStage,
   saveServerProfile,
@@ -99,6 +101,7 @@ export default function Home() {
   const [fullEpisodeArtifact, setFullEpisodeArtifact] = useState<FullEpisodeArtifact | null>(null);
   const [reelsArtifact, setReelsArtifact] = useState<ReelsArtifact | null>(null);
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
+  const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -241,6 +244,11 @@ export default function Home() {
     } catch {
       setComplianceReportArtifact(null);
     }
+    try {
+      setPublishPackageArtifact(await fetchPublishPackageArtifact(projectId));
+    } catch {
+      setPublishPackageArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -267,6 +275,7 @@ export default function Home() {
       setFullEpisodeArtifact(null);
       setReelsArtifact(null);
       setComplianceReportArtifact(null);
+      setPublishPackageArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -613,7 +622,57 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {complianceReportArtifact ? (
+          {publishPackageArtifact ? (
+            <div className="p-5 md:p-7" data-testid="publish-package-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Paczka publikacji</h2>
+                  <p className="mt-2 text-sm text-white/52">{publishPackageArtifact.topic} · {publishPackageArtifact.age_range}</p>
+                </div>
+                <PackageCheck className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
+                <p className="text-sm font-black">Status paczki</p>
+                <p className="mt-3 text-4xl font-black leading-tight">Ready</p>
+                <p className="mt-4 text-sm font-semibold">{publishPackageArtifact.package_path}</p>
+              </div>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4">
+                <p className="text-sm font-black text-[var(--teal)]">Pliki wyjściowe</p>
+                <p className="mt-3 text-sm leading-6 text-white/70">{publishPackageArtifact.episode_output_path}</p>
+                <div className="mt-3 space-y-2 text-sm text-white/58">
+                  {publishPackageArtifact.reel_output_paths.map((path) => (
+                    <p key={path}>{path}</p>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                {Object.entries(publishPackageArtifact.publishing_metadata).map(([key, value]) => (
+                  <div key={key} className="rounded-2xl bg-black/25 p-4">
+                    <p className="text-xs font-black uppercase text-white/38">{key}</p>
+                    <p className="mt-2 text-sm font-black text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Manifesty</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {publishPackageArtifact.included_manifests.map((manifest) => (
+                    <span key={manifest} className="rounded-full bg-white/70 px-3 py-1 text-xs font-black text-[var(--ink)]">
+                      {manifest}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 rounded-2xl bg-black/25 p-4">
+                <p className="text-sm font-black text-[var(--acid)]">Checklist</p>
+                <ul className="mt-3 space-y-2 text-sm text-white/68">
+                  {publishPackageArtifact.operator_checklist.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : complianceReportArtifact ? (
             <div className="p-5 md:p-7" data-testid="compliance-report-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>
