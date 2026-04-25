@@ -204,6 +204,14 @@ class PublishPackageArtifact(BaseModel):
     created_at: str
 
 
+class ArtifactInventoryItem(BaseModel):
+    artifact_type: str
+    file_name: str
+    relative_path: str
+    available: bool
+    updated_at: str | None = None
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

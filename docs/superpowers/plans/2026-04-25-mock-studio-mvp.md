@@ -308,3 +308,19 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Add API access to the publish package artifact.
 - [x] Render package status, output paths, manifests, metadata, and checklist in the cockpit.
 - [x] Verify the artifact appears after compliance approval.
+
+### Follow-up Completed: Artifact Inventory
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Add an artifact inventory endpoint at `GET /api/projects/{project_id}/artifacts`.
+- [x] Return generated manifest filenames, normalized artifact types, relative paths, availability, and timestamps.
+- [x] Render the inventory as a compact artifact register in the cockpit.
+- [x] Verify the inventory includes the final publish package manifest.

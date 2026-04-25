@@ -197,6 +197,14 @@ export type PublishPackageArtifact = {
   created_at: string;
 };
 
+export type ArtifactInventoryItem = {
+  artifact_type: string;
+  file_name: string;
+  relative_path: string;
+  available: boolean;
+  updated_at: string | null;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -290,6 +298,10 @@ export function fetchComplianceReportArtifact(projectId: string) {
 
 export function fetchPublishPackageArtifact(projectId: string) {
   return request<PublishPackageArtifact>(`/api/projects/${projectId}/artifacts/publish-package`);
+}
+
+export function fetchArtifactInventory(projectId: string) {
+  return request<ArtifactInventoryItem[]>(`/api/projects/${projectId}/artifacts`);
 }
 
 export function runStage(projectId: string, stage: string) {

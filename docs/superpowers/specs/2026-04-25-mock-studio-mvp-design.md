@@ -77,6 +77,8 @@ The mock `quality.compliance_report` stage creates a reviewable `compliance-repo
 
 The mock `publish.prepare_package` stage creates a completed `publish-package.json` artifact after compliance approval. The package manifest records the publish folder path, episode and reel outputs, included manifests, publishing metadata, and a final operator checklist. This closes the mock pipeline with a stable handoff contract for the future real packaging worker.
 
+The backend also exposes `GET /api/projects/{project_id}/artifacts` as a manifest inventory for the selected project. It returns the generated artifact filenames, normalized artifact types, project-relative paths, availability, and filesystem update timestamps. The cockpit renders this inventory as a compact artifact register so operators can see the full production trail while reviewing the latest artifact panel.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

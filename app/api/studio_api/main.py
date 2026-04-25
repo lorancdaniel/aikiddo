@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .mock_server import MockGpuServer
 from .models import (
+    ArtifactInventoryItem,
     BriefInput,
     ComplianceReportArtifact,
     FullEpisodeArtifact,
@@ -257,6 +258,13 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if package is None:
             raise HTTPException(status_code=404, detail="Publish package artifact not found")
         return package
+
+    @app.get("/api/projects/{project_id}/artifacts", response_model=list[ArtifactInventoryItem])
+    def list_project_artifacts(project_id: str) -> list[ArtifactInventoryItem]:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return storage.list_artifacts(project_id)
 
     return app
 

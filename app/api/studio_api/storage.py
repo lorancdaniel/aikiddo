@@ -1,7 +1,25 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+
+
+ARTIFACT_MANIFESTS = [
+    ("brief", "brief.json"),
+    ("lyrics", "lyrics.json"),
+    ("storyboard", "storyboard.json"),
+    ("keyframes", "keyframes.json"),
+    ("video_scenes", "video-scenes.json"),
+    ("full_episode", "full-episode.json"),
+    ("reels", "reels.json"),
+    ("compliance_report", "compliance-report.json"),
+    ("publish_package", "publish-package.json"),
+]
+
+
+def utc_now_from_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
 
 class ProjectStorage:
@@ -151,6 +169,25 @@ class ProjectStorage:
         if not package_file.exists():
             return None
         return PublishPackageArtifact.model_validate_json(package_file.read_text(encoding="utf-8"))
+
+    def list_artifacts(self, project_id: str) -> list[ArtifactInventoryItem]:
+        project_dir = self.project_dir(project_id)
+        inventory: list[ArtifactInventoryItem] = []
+        for artifact_type, file_name in ARTIFACT_MANIFESTS:
+            artifact_file = project_dir / file_name
+            updated_at = None
+            if artifact_file.exists():
+                updated_at = utc_now_from_timestamp(artifact_file.stat().st_mtime)
+            inventory.append(
+                ArtifactInventoryItem(
+                    artifact_type=artifact_type,
+                    file_name=file_name,
+                    relative_path=f"projects/{project_id}/{file_name}",
+                    available=artifact_file.exists(),
+                    updated_at=updated_at,
+                )
+            )
+        return [item for item in inventory if item.available]
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

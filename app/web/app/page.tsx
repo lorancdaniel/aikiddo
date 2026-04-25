@@ -7,8 +7,10 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
 import {
   approveStage,
+  ArtifactInventoryItem,
   ComplianceReportArtifact,
   createProject,
+  fetchArtifactInventory,
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
@@ -102,6 +104,7 @@ export default function Home() {
   const [reelsArtifact, setReelsArtifact] = useState<ReelsArtifact | null>(null);
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
+  const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -249,6 +252,11 @@ export default function Home() {
     } catch {
       setPublishPackageArtifact(null);
     }
+    try {
+      setArtifactInventory(await fetchArtifactInventory(projectId));
+    } catch {
+      setArtifactInventory([]);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -276,6 +284,7 @@ export default function Home() {
       setReelsArtifact(null);
       setComplianceReportArtifact(null);
       setPublishPackageArtifact(null);
+      setArtifactInventory([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -618,6 +627,27 @@ export default function Home() {
                 ) : null}
               </div>
             ))}
+          </div>
+          <div className="mt-7 rounded-2xl border border-white/10 bg-black/20 p-4" data-testid="artifact-inventory">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-black">Rejestr artefaktów</p>
+              <span className="status-pill bg-white/10 text-white/70">{artifactInventory.length}</span>
+            </div>
+            {artifactInventory.length === 0 ? (
+              <p className="mt-3 text-sm text-white/45">Manifesty pojawią się po uruchomieniu etapów.</p>
+            ) : (
+              <div className="mt-4 grid gap-2">
+                {artifactInventory.map((artifact) => (
+                  <div key={artifact.file_name} className="flex items-center justify-between gap-3 rounded-xl bg-white/7 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black">{artifact.file_name}</p>
+                      <p className="truncate text-xs text-white/42">{artifact.relative_path}</p>
+                    </div>
+                    <span className="status-pill shrink-0 bg-[var(--teal)] text-[#07110f]">ready</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </article>
 
