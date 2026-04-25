@@ -190,6 +190,50 @@ def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Pa
     assert response.json()["detail"] == "Previous stage brief.generate must be completed first"
 
 
+def test_storyboard_job_writes_reviewable_storyboard_artifact(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Kolorowa przygoda",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "radość",
+            "educational_goal": "dziecko rozpoznaje kolory w scenach",
+            "characters": ["rainbow_friend_v1"],
+        },
+    ).json()
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+    client.post(f"/api/projects/{created['id']}/stages/lyrics.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/characters.import_or_approve")
+    client.post(f"/api/projects/{created['id']}/stages/characters.import_or_approve/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/audio.generate_or_import")
+
+    response = client.post(f"/api/projects/{created['id']}/jobs/storyboard.generate")
+
+    assert response.status_code == 202
+    job = response.json()
+    assert job["stage"] == "storyboard.generate"
+    assert job["status"] == "needs_review"
+
+    storyboard_file = tmp_path / "projects" / created["id"] / "storyboard.json"
+    storyboard = json.loads(storyboard_file.read_text())
+    assert storyboard["title"] == "Kolorowa przygoda"
+    assert len(storyboard["scenes"]) == 4
+    assert storyboard["scenes"][0]["visual_prompt"]
+    assert storyboard["safety_checks"]
+
+    artifact_response = client.get(f"/api/projects/{created['id']}/artifacts/storyboard")
+    assert artifact_response.status_code == 200
+    assert artifact_response.json() == storyboard
+
+    project = client.get(f"/api/projects/{created['id']}").json()
+    stage = next(item for item in project["pipeline"] if item["stage"] == "storyboard.generate")
+    assert stage["status"] == "needs_review"
+    assert stage["job_id"] == job["id"]
+
+
 def test_approve_review_stage_marks_it_completed_and_writes_review(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

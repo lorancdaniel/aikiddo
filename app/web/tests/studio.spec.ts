@@ -39,4 +39,17 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await page.getByTestId("approve-lyrics.generate").click();
   await expect(page.getByTestId("stage-lyrics.generate")).toContainText("gotowe");
   await expect(page.getByText("Tekst zatwierdzony.")).toBeVisible();
+
+  await page.getByTestId("run-characters.import_or_approve").click();
+  await expect(page.getByTestId("stage-characters.import_or_approve")).toContainText("do akceptacji");
+  await page.getByTestId("approve-characters.import_or_approve").click();
+  await expect(page.getByTestId("stage-characters.import_or_approve")).toContainText("gotowe");
+
+  await page.getByTestId("run-audio.generate_or_import").click();
+  await expect(page.getByTestId("stage-audio.generate_or_import")).toContainText("gotowe");
+
+  await page.getByTestId("run-storyboard.generate").click();
+  await expect(page.getByTestId("stage-storyboard.generate")).toContainText("do akceptacji");
+  await expect(page.getByTestId("storyboard-artifact")).toContainText("Storyboard");
+  await expect(page.getByTestId("storyboard-artifact")).toContainText("Scena 1");
 });

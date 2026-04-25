@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import Job, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, utc_now
+from .models import Job, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, utc_now
 
 
 class ProjectStorage:
@@ -60,6 +60,19 @@ class ProjectStorage:
         if not lyrics_file.exists():
             return None
         return LyricsArtifact.model_validate_json(lyrics_file.read_text(encoding="utf-8"))
+
+    def save_storyboard(self, project_id: str, storyboard: StoryboardArtifact) -> StoryboardArtifact:
+        (self.project_dir(project_id) / "storyboard.json").write_text(
+            json.dumps(storyboard.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return storyboard
+
+    def get_storyboard(self, project_id: str) -> StoryboardArtifact | None:
+        storyboard_file = self.project_dir(project_id) / "storyboard.json"
+        if not storyboard_file.exists():
+            return None
+        return StoryboardArtifact.model_validate_json(storyboard_file.read_text(encoding="utf-8"))
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

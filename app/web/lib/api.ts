@@ -71,6 +71,25 @@ export type LyricsArtifact = {
   created_at: string;
 };
 
+export type StoryboardScene = {
+  id: string;
+  duration_seconds: number;
+  lyric_anchor: string;
+  action: string;
+  visual_prompt: string;
+  camera: string;
+  safety_note: string;
+};
+
+export type StoryboardArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  scenes: StoryboardScene[];
+  safety_checks: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -136,6 +155,10 @@ export function approveStage(projectId: string, stage: string, note = "") {
 
 export function fetchLyricsArtifact(projectId: string) {
   return request<LyricsArtifact>(`/api/projects/${projectId}/artifacts/lyrics`);
+}
+
+export function fetchStoryboardArtifact(projectId: string) {
+  return request<StoryboardArtifact>(`/api/projects/${projectId}/artifacts/storyboard`);
 }
 
 export function runStage(projectId: string, stage: string) {

@@ -16,6 +16,7 @@ from .models import (
     StageApproval,
     StageApprovalInput,
     StageStatus,
+    StoryboardArtifact,
     create_project_from_brief,
     utc_now,
 )
@@ -101,6 +102,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         storage.save_job(job)
         if stage == "lyrics.generate":
             storage.save_lyrics(project_id, mock_server.generate_lyrics(project.brief))
+        if stage == "storyboard.generate":
+            storage.save_storyboard(project_id, mock_server.generate_storyboard(project.brief, storage.get_lyrics(project_id)))
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
@@ -155,6 +158,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if lyrics is None:
             raise HTTPException(status_code=404, detail="Lyrics artifact not found")
         return lyrics
+
+    @app.get("/api/projects/{project_id}/artifacts/storyboard", response_model=StoryboardArtifact)
+    def get_storyboard_artifact(project_id: str) -> StoryboardArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        storyboard = storage.get_storyboard(project_id)
+        if storyboard is None:
+            raise HTTPException(status_code=404, detail="Storyboard artifact not found")
+        return storyboard
 
     return app
 

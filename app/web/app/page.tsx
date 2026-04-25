@@ -11,6 +11,7 @@ import {
   fetchProjects,
   fetchLyricsArtifact,
   fetchServerProfile,
+  fetchStoryboardArtifact,
   LyricsArtifact,
   Project,
   ProjectInput,
@@ -19,6 +20,7 @@ import {
   ServerConnection,
   ServerProfile,
   ServerProfileInput,
+  StoryboardArtifact,
   testServerConnection
 } from "../lib/api";
 
@@ -66,12 +68,22 @@ function getStageStatus(project: Project | null, stage: string) {
   return project?.pipeline.find((item) => item.stage === stage)?.status;
 }
 
+function canRunPipelineStage(project: Project | null, stage: string) {
+  if (!project) return false;
+  const stageIndex = project.pipeline.findIndex((item) => item.stage === stage);
+  if (stageIndex < 1) return false;
+  const currentStage = project.pipeline[stageIndex];
+  const previousStage = project.pipeline[stageIndex - 1];
+  return currentStage.status === "pending" && previousStage.status === "completed";
+}
+
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [connection, setConnection] = useState<ServerConnection | null>(null);
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
   const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
+  const [storyboardArtifact, setStoryboardArtifact] = useState<StoryboardArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -92,7 +104,7 @@ export default function Home() {
   });
   const [jobMessage, setJobMessage] = useState("");
   const [isCreating, setIsCreating] = useState(false);
-  const [isRunning, setIsRunning] = useState(false);
+  const [runningStage, setRunningStage] = useState<string | null>(null);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [approvingStage, setApprovingStage] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -104,13 +116,7 @@ export default function Home() {
         setProjects(projectList);
         const firstProject = projectList[0] ?? null;
         setSelectedProject(firstProject);
-        if (firstProject && getStageStatus(firstProject, "lyrics.generate")) {
-          try {
-            setLyricsArtifact(await fetchLyricsArtifact(firstProject.id));
-          } catch {
-            setLyricsArtifact(null);
-          }
-        }
+        if (firstProject) await loadArtifacts(firstProject.id);
         setConnection(server);
         try {
           const profile = await fetchServerProfile();
@@ -184,6 +190,19 @@ export default function Home() {
 
   const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
 
+  async function loadArtifacts(projectId: string) {
+    try {
+      setLyricsArtifact(await fetchLyricsArtifact(projectId));
+    } catch {
+      setLyricsArtifact(null);
+    }
+    try {
+      setStoryboardArtifact(await fetchStoryboardArtifact(projectId));
+    } catch {
+      setStoryboardArtifact(null);
+    }
+  }
+
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsCreating(true);
@@ -202,6 +221,7 @@ export default function Home() {
       setProjects((current) => [created, ...current.filter((project) => project.id !== created.id)]);
       setSelectedProject(created);
       setLyricsArtifact(null);
+      setStoryboardArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -209,24 +229,23 @@ export default function Home() {
     }
   }
 
-  async function handleRunLyrics() {
+  async function handleRunStage(stage: string) {
     if (!selectedProject) return;
-    setIsRunning(true);
+    setRunningStage(stage);
     setError("");
     setJobMessage("");
 
     try {
-      const job = await runStage(selectedProject.id, "lyrics.generate");
-      const lyrics = await fetchLyricsArtifact(selectedProject.id);
+      const job = await runStage(selectedProject.id, stage);
       const updatedProjects = await fetchProjects();
       setProjects(updatedProjects);
       setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
-      setLyricsArtifact(lyrics);
+      await loadArtifacts(selectedProject.id);
       setJobMessage(job.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
     } finally {
-      setIsRunning(false);
+      setRunningStage(null);
     }
   }
 
@@ -308,10 +327,10 @@ export default function Home() {
             <button
               className="inline-flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-3 text-sm font-bold text-[var(--ink)] transition hover:scale-[1.02]"
               type="button"
-              onClick={handleRunLyrics}
-              disabled={!selectedProject || isRunning || !canRunLyrics}
+              onClick={() => handleRunStage("lyrics.generate")}
+              disabled={!selectedProject || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
             >
-              {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              {runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Uruchom tekst
             </button>
           </div>
@@ -461,11 +480,7 @@ export default function Home() {
                   type="button"
                   onClick={async () => {
                     setSelectedProject(project);
-                    try {
-                      setLyricsArtifact(await fetchLyricsArtifact(project.id));
-                    } catch {
-                      setLyricsArtifact(null);
-                    }
+                    await loadArtifacts(project.id);
                   }}
                 >
                   <span className="block text-sm font-bold">{project.title}</span>
@@ -488,10 +503,10 @@ export default function Home() {
               className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-black text-[var(--ink)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
               data-testid="run-lyrics-button"
-              onClick={handleRunLyrics}
-              disabled={!selectedProject || isRunning || !canRunLyrics}
+              onClick={() => handleRunStage("lyrics.generate")}
+              disabled={!selectedProject || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
             >
-              {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              {runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Uruchom tekst
             </button>
           </div>
@@ -535,13 +550,64 @@ export default function Home() {
                     Zatwierdź
                   </button>
                 ) : null}
+                {canRunPipelineStage(selectedProject, stage.stage) ? (
+                  <button
+                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    data-testid={`run-${stage.stage}`}
+                    onClick={() => handleRunStage(stage.stage)}
+                    disabled={runningStage !== null}
+                  >
+                    {runningStage === stage.stage ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
+                    Uruchom
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {lyricsArtifact ? (
+          {storyboardArtifact ? (
+            <div className="p-5 md:p-7" data-testid="storyboard-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Storyboard</h2>
+                  <p className="mt-2 text-sm text-white/52">{storyboardArtifact.topic} · {storyboardArtifact.age_range}</p>
+                </div>
+                <Clapperboard className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="grid gap-4">
+                {storyboardArtifact.scenes.map((scene, index) => (
+                  <div key={scene.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-white/7">
+                    <div
+                      className="min-h-36 bg-cover bg-center p-4 transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+                      style={{
+                        backgroundImage:
+                          `linear-gradient(180deg, rgba(12,12,13,0.08), rgba(12,12,13,0.84)), url(https://picsum.photos/seed/${scene.id}/900/520)`
+                      }}
+                    >
+                      <p className="text-sm font-black text-[var(--acid)]">Scena {index + 1} · {scene.duration_seconds}s</p>
+                      <p className="mt-16 text-xl font-black leading-tight">{scene.action}</p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm font-black text-[var(--teal)]">Prompt wizualny</p>
+                      <p className="mt-2 text-sm leading-6 text-white/70">{scene.visual_prompt}</p>
+                      <p className="mt-3 text-xs text-white/45">{scene.camera}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Kontrola bezpieczeństwa</p>
+                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                  {storyboardArtifact.safety_checks.map((check) => (
+                    <li key={check}>{check}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : lyricsArtifact ? (
             <div className="p-5 md:p-7" data-testid="lyrics-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

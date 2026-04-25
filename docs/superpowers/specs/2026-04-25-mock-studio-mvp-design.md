@@ -63,6 +63,8 @@ Pipeline execution is sequential in the MVP. A stage cannot start until the imme
 
 The mock `lyrics.generate` stage creates a reviewable `lyrics.json` artifact in the project directory. The artifact includes song structure, chorus, verses, rhythm notes, and safety notes. The cockpit renders this artifact as a human-readable review panel before the operator approves the lyrics stage.
 
+The mock `storyboard.generate` stage creates a reviewable `storyboard.json` artifact after the character and audio gates are complete. The artifact contains shot-by-shot scene descriptions, palette notes, camera language, and continuity constraints so the later keyframe/video stages can consume a stable creative brief. The cockpit promotes the storyboard artifact above lyrics once it exists, giving the operator the latest review target.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

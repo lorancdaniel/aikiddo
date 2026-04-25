@@ -33,6 +33,7 @@ HUMAN_REVIEW_STAGES = {
     "brief.generate",
     "lyrics.generate",
     "characters.import_or_approve",
+    "storyboard.generate",
     "keyframes.generate",
     "video.scenes.generate",
     "quality.compliance_report",
@@ -74,6 +75,25 @@ class LyricsArtifact(BaseModel):
     verses: list[list[str]]
     rhythm_notes: list[str]
     safety_notes: list[str]
+    created_at: str
+
+
+class StoryboardScene(BaseModel):
+    id: str
+    duration_seconds: int
+    lyric_anchor: str
+    action: str
+    visual_prompt: str
+    camera: str
+    safety_note: str
+
+
+class StoryboardArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    scenes: list[StoryboardScene]
+    safety_checks: list[str]
     created_at: str
 
 
