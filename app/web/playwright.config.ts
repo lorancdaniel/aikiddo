@@ -11,7 +11,8 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "rm -rf ../../.tmp/e2e-projects && STUDIO_PROJECTS_ROOT=../../.tmp/e2e-projects python3 -m uvicorn studio_api.main:app --port 8010",
+      command:
+        "rm -rf ../../.tmp/e2e-projects && STUDIO_PROJECTS_ROOT=../../.tmp/e2e-projects $([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3) -m uvicorn studio_api.main:app --port 8010",
       cwd: "../api",
       url: "http://127.0.0.1:8010/health",
       reuseExistingServer: false,
