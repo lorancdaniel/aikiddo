@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #0c0c0d;
+  --paper: #f7f4ea;
+  --mist: #d8ece7;
+  --acid: #d7ff57;
+  --coral: #ff6b4a;
+  --violet: #5e7cff;
+  --teal: #4fb7a4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.ambient-studio {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(215, 255, 87, 0.26), transparent 28rem),
+    radial-gradient(circle at 92% 22%, rgba(255, 107, 74, 0.18), transparent 30rem),
+    radial-gradient(circle at 58% 82%, rgba(79, 183, 164, 0.26), transparent 34rem),
+    linear-gradient(135deg, #101012 0%, #191915 48%, #0b0e12 100%);
+}
+
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.12;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  mix-blend-mode: soft-light;
+}
+
+.studio-card {
+  border: 1px solid rgba(247, 244, 234, 0.16);
+  background: rgba(12, 12, 13, 0.62);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(22px);
+}
+
+.field {
+  width: 100%;
+  border: 1px solid rgba(247, 244, 234, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(247, 244, 234, 0.08);
+  color: var(--paper);
+  outline: none;
+  padding: 0.85rem 0.95rem;
+}
+
+.field:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 4px rgba(215, 255, 87, 0.12);
+}
+
+.field::placeholder {
+  color: rgba(247, 244, 234, 0.46);
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-transform: uppercase;
+}
