@@ -14,6 +14,7 @@ import {
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
+  fetchProjectJobs,
   fetchPublishPackageArtifact,
   fetchProjects,
   fetchLyricsArtifact,
@@ -22,6 +23,7 @@ import {
   fetchStoryboardArtifact,
   fetchVideoScenesArtifact,
   FullEpisodeArtifact,
+  Job,
   KeyframesArtifact,
   LyricsArtifact,
   Project,
@@ -105,6 +107,7 @@ export default function Home() {
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
+  const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -257,6 +260,11 @@ export default function Home() {
     } catch {
       setArtifactInventory([]);
     }
+    try {
+      setProjectJobs(await fetchProjectJobs(projectId));
+    } catch {
+      setProjectJobs([]);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -285,6 +293,7 @@ export default function Home() {
       setComplianceReportArtifact(null);
       setPublishPackageArtifact(null);
       setArtifactInventory([]);
+      setProjectJobs([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -644,6 +653,30 @@ export default function Home() {
                       <p className="truncate text-xs text-white/42">{artifact.relative_path}</p>
                     </div>
                     <span className="status-pill shrink-0 bg-[var(--teal)] text-[#07110f]">ready</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4" data-testid="job-history">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-black">Historia jobów</p>
+              <span className="status-pill bg-white/10 text-white/70">{projectJobs.length}</span>
+            </div>
+            {projectJobs.length === 0 ? (
+              <p className="mt-3 text-sm text-white/45">Joby pojawią się po uruchomieniu pierwszego etapu.</p>
+            ) : (
+              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                {projectJobs.map((job) => (
+                  <div key={job.id} className="grid gap-3 rounded-xl bg-black/24 px-3 py-3 md:grid-cols-[1fr_auto] md:items-center">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black">{stageLabels[job.stage] ?? job.stage}</p>
+                      <p className="truncate text-xs text-white/42">{job.stage} · {job.id}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="status-pill bg-white/10 text-white/64">{job.adapter}</span>
+                      <span className={`status-pill ${statusClass(job.status)}`}>{statusLabels[job.status] ?? job.status}</span>
+                    </div>
                   </div>
                 ))}
               </div>

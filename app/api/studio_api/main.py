@@ -72,6 +72,13 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return project
 
+    @app.get("/api/projects/{project_id}/jobs", response_model=list[Job])
+    def list_project_jobs(project_id: str) -> list[Job]:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return storage.list_jobs(project_id)
+
     @app.post("/api/server/test-connection")
     def test_server_connection():
         return mock_server.test_connection(storage.get_server_profile())

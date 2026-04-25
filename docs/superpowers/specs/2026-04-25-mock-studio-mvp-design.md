@@ -23,6 +23,7 @@ The backend exposes:
 - `GET /api/projects`: list local projects.
 - `POST /api/projects`: create a project from title, topic, age range, emotional tone, educational goal, and optional characters.
 - `GET /api/projects/{project_id}`: read project details and pipeline state.
+- `GET /api/projects/{project_id}/jobs`: list all job manifests for a project in creation order.
 - `POST /api/projects/{project_id}/jobs/{stage}`: submit a mock job for a pipeline stage.
 - `GET /api/jobs/{job_id}`: read job status.
 - `POST /api/server/test-connection`: return mock server connectivity status.
@@ -78,6 +79,8 @@ The mock `quality.compliance_report` stage creates a reviewable `compliance-repo
 The mock `publish.prepare_package` stage creates a completed `publish-package.json` artifact after compliance approval. The package manifest records the publish folder path, episode and reel outputs, included manifests, publishing metadata, and a final operator checklist. This closes the mock pipeline with a stable handoff contract for the future real packaging worker.
 
 The backend also exposes `GET /api/projects/{project_id}/artifacts` as a manifest inventory for the selected project. It returns the generated artifact filenames, normalized artifact types, project-relative paths, availability, and filesystem update timestamps. The cockpit renders this inventory as a compact artifact register so operators can see the full production trail while reviewing the latest artifact panel.
+
+The backend exposes `GET /api/projects/{project_id}/jobs` as a project job ledger. It returns saved job manifests in creation order, including stage, adapter, status, message, and timestamps. The cockpit renders this as a compact history panel beside the artifact register so operators can audit what ran locally before the real SSH worker is introduced.
 
 ## Testing
 

@@ -170,6 +170,36 @@ def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) ->
     assert artifact_response.json() == lyrics
 
 
+def test_project_jobs_can_be_listed_in_creation_order(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Historia pracy",
+            "topic": "rytmy",
+            "age_range": "4-6",
+            "emotional_tone": "energia",
+            "educational_goal": "dziecko rozpoznaje prosty rytm",
+            "characters": [],
+        },
+    ).json()
+
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+    lyrics_job = client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate").json()
+    client.post(f"/api/projects/{created['id']}/stages/lyrics.generate/approve", json={})
+    characters_job = client.post(f"/api/projects/{created['id']}/jobs/characters.import_or_approve").json()
+
+    response = client.get(f"/api/projects/{created['id']}/jobs")
+
+    assert response.status_code == 200
+    jobs = response.json()
+    assert [job["id"] for job in jobs] == [lyrics_job["id"], characters_job["id"]]
+    assert [job["stage"] for job in jobs] == ["lyrics.generate", "characters.import_or_approve"]
+    assert [job["adapter"] for job in jobs] == ["mock", "mock"]
+    assert jobs[0]["status"] == "needs_review"
+    assert jobs[1]["status"] == "needs_review"
+
+
 def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

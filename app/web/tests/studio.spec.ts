@@ -94,4 +94,7 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await expect(page.getByTestId("artifact-inventory")).toContainText("Rejestr artefaktów");
   await expect(page.getByTestId("artifact-inventory")).toContainText("publish-package.json");
   await expect(page.getByTestId("artifact-inventory")).toContainText("video-scenes.json");
+  await expect(page.getByTestId("job-history")).toContainText("Historia jobów");
+  await expect(page.getByTestId("job-history")).toContainText("lyrics.generate");
+  await expect(page.getByTestId("job-history")).toContainText("publish.prepare_package");
 });

@@ -324,3 +324,18 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Return generated manifest filenames, normalized artifact types, relative paths, availability, and timestamps.
 - [x] Render the inventory as a compact artifact register in the cockpit.
 - [x] Verify the inventory includes the final publish package manifest.
+
+### Follow-up Completed: Project Job History
+
+**Files:**
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Add a project job history endpoint at `GET /api/projects/{project_id}/jobs`.
+- [x] Return saved job manifests in creation order for project-level audit.
+- [x] Render the history as a compact cockpit ledger with stage, adapter, status, and job id.
+- [x] Verify the history includes early generation jobs and the final publish package job.

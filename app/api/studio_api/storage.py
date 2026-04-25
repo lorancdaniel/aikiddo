@@ -66,6 +66,13 @@ class ProjectStorage:
         )
         return job
 
+    def list_jobs(self, project_id: str) -> list[Job]:
+        jobs_dir = self.project_dir(project_id) / "jobs"
+        if not jobs_dir.exists():
+            return []
+        jobs = [Job.model_validate_json(job_file.read_text(encoding="utf-8")) for job_file in sorted(jobs_dir.glob("*.json"))]
+        return sorted(jobs, key=lambda job: job.created_at)
+
     def save_lyrics(self, project_id: str, lyrics: LyricsArtifact) -> LyricsArtifact:
         (self.project_dir(project_id) / "lyrics.json").write_text(
             json.dumps(lyrics.model_dump(mode="json"), ensure_ascii=False, indent=2),

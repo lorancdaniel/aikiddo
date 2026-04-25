@@ -237,6 +237,10 @@ export function fetchProjects() {
   return request<Project[]>("/api/projects");
 }
 
+export function fetchProjectJobs(projectId: string) {
+  return request<Job[]>(`/api/projects/${projectId}/jobs`);
+}
+
 export function createProject(input: ProjectInput) {
   return request<Project>("/api/projects", {
     method: "POST",
