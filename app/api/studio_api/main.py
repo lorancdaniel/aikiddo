@@ -12,6 +12,9 @@ from .models import (
     Project,
     ServerProfile,
     ServerProfileInput,
+    StageApproval,
+    StageApprovalInput,
+    StageStatus,
     create_project_from_brief,
     utc_now,
 )
@@ -93,6 +96,35 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                 break
         storage.save_project(project)
         return job
+
+    @app.post("/api/projects/{project_id}/stages/{stage}/approve", response_model=Project)
+    def approve_stage(project_id: str, stage: str, approval_input: StageApprovalInput) -> Project:
+        if stage not in PIPELINE_STAGES:
+            raise HTTPException(status_code=400, detail="Unknown pipeline stage")
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        pipeline_stage = next((item for item in project.pipeline if item.stage == stage), None)
+        if pipeline_stage is None:
+            raise HTTPException(status_code=400, detail="Unknown pipeline stage")
+        if pipeline_stage.status != StageStatus.NEEDS_REVIEW:
+            raise HTTPException(status_code=409, detail="Stage is not waiting for review")
+
+        now = utc_now()
+        pipeline_stage.status = StageStatus.COMPLETED
+        pipeline_stage.updated_at = now
+        storage.save_stage_approval(
+            StageApproval(
+                id=f"approval_{stage.replace('.', '_')}_{now}",
+                project_id=project_id,
+                stage=stage,
+                status="completed",
+                note=approval_input.note,
+                approved_at=now,
+            )
+        )
+        return storage.save_project(project)
 
     @app.get("/api/jobs/{job_id}", response_model=Job)
     def get_job(job_id: str) -> Job:

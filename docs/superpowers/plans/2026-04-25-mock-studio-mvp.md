@@ -141,3 +141,20 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Keep credential contents out of the profile.
 - [x] Show and save the profile from the cockpit UI.
 - [x] Make Playwright e2e use isolated ports and an isolated data directory.
+
+### Follow-up Completed: Human Approval Gates
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Add an approval endpoint for stages in `needs_review`.
+- [x] Reject approval for stages that are not waiting for review.
+- [x] Persist approval manifests under `projects/<project_id>/reviews/`.
+- [x] Add pipeline card approval controls in the cockpit.
+- [x] Extend e2e to approve brief and lyrics stages.

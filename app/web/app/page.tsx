@@ -6,6 +6,7 @@ import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Activity, ArrowRight, CheckCircle2, Clapperboard, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
 import {
+  approveStage,
   createProject,
   fetchProjects,
   fetchServerProfile,
@@ -86,6 +87,7 @@ export default function Home() {
   const [isCreating, setIsCreating] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isSavingServer, setIsSavingServer] = useState(false);
+  const [approvingStage, setApprovingStage] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -222,6 +224,23 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Nie udało się zapisać profilu serwera.");
     } finally {
       setIsSavingServer(false);
+    }
+  }
+
+  async function handleApproveStage(stage: string) {
+    if (!selectedProject) return;
+    setApprovingStage(stage);
+    setError("");
+
+    try {
+      const updated = await approveStage(selectedProject.id, stage, `Operator approved ${stage}.`);
+      setSelectedProject(updated);
+      setProjects((current) => [updated, ...current.filter((project) => project.id !== updated.id)]);
+      setJobMessage(`${stageLabels[stage] ?? stage} zatwierdzony.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się zatwierdzić etapu.");
+    } finally {
+      setApprovingStage(null);
     }
   }
 
@@ -467,8 +486,28 @@ export default function Home() {
                   <span className={`status-pill ${statusClass(stage.status)}`}>{statusLabels[stage.status] ?? stage.status}</span>
                 </div>
                 <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
-                  <div className={`h-full rounded-full ${stage.status === "pending" ? "w-[12%] bg-white/20" : "w-[72%] bg-[var(--acid)]"}`} />
+                  <div
+                    className={`h-full rounded-full ${
+                      stage.status === "completed"
+                        ? "w-full bg-[var(--teal)]"
+                        : stage.status === "pending"
+                          ? "w-[12%] bg-white/20"
+                          : "w-[72%] bg-[var(--acid)]"
+                    }`}
+                  />
                 </div>
+                {stage.status === "needs_review" ? (
+                  <button
+                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--acid)] px-3 py-2 text-sm font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    data-testid={`approve-${stage.stage}`}
+                    onClick={() => handleApproveStage(stage.stage)}
+                    disabled={approvingStage === stage.stage}
+                  >
+                    {approvingStage === stage.stage ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                    Zatwierdź
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import Job, Project, ServerProfile, ServerProfileInput, utc_now
+from .models import Job, Project, ServerProfile, ServerProfileInput, StageApproval, utc_now
 
 
 class ProjectStorage:
@@ -53,6 +53,15 @@ class ProjectStorage:
         if not matches:
             return None
         return Job.model_validate_json(matches[0].read_text(encoding="utf-8"))
+
+    def save_stage_approval(self, approval: StageApproval) -> StageApproval:
+        reviews_dir = self.project_dir(approval.project_id) / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        (reviews_dir / f"{approval.stage}.approval.json").write_text(
+            json.dumps(approval.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return approval
 
     def save_server_profile(self, profile_input: ServerProfileInput) -> ServerProfile:
         self.studio_dir.mkdir(parents=True, exist_ok=True)

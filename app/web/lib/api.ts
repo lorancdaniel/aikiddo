@@ -115,6 +115,13 @@ export function saveServerProfile(input: ServerProfileInput) {
   });
 }
 
+export function approveStage(projectId: string, stage: string, note = "") {
+  return request<Project>(`/api/projects/${projectId}/stages/${stage}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ note })
+  });
+}
+
 export function runStage(projectId: string, stage: string) {
   return request<Job>(`/api/projects/${projectId}/jobs/${stage}`, {
     method: "POST"

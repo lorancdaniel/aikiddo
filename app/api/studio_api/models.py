@@ -72,6 +72,19 @@ class PipelineStage(BaseModel):
     updated_at: str
 
 
+class StageApprovalInput(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
+class StageApproval(BaseModel):
+    id: str
+    project_id: str
+    stage: str
+    status: Literal["completed"]
+    note: str
+    approved_at: str
+
+
 class Project(BaseModel):
     id: str
     title: str
