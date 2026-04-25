@@ -511,6 +511,16 @@ class GenerationRunnerState(BaseModel):
     mode: Literal["single_flight"]
     resource: str
     state: Literal["waiting", "acquired", "released"]
+    auto_dispatch: bool = True
+    trigger: Literal["manual", "auto_drain"] | None = None
+
+
+class JobEvent(BaseModel):
+    cursor: int
+    job_id: str
+    event: str
+    message: str
+    created_at: str
 
 
 class DispatchNextInput(BaseModel):
@@ -556,6 +566,17 @@ class WorkerLock(BaseModel):
     acquired_at: str
     heartbeat_at: str
     lease_expires_at: str
+
+
+class WorkerQueueStatus(BaseModel):
+    resource: str
+    adapter: Literal["ssh"]
+    auto_dispatch: bool = True
+    queued_count: int
+    queued_job_ids: list[str] = Field(default_factory=list)
+    current_lock: WorkerLock | None = None
+    current_job_id: str | None = None
+    oldest_queued_job_id: str | None = None
 
 
 class RemotePilotRun(BaseModel):

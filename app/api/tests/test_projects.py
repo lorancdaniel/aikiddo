@@ -369,7 +369,13 @@ def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypa
     assert job_detail["status"] == "queued"
     assert job_detail["phase"] == "waiting_for_worker"
     assert job_detail["queue_position"] == 1
-    assert job_detail["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "waiting"}
+    assert job_detail["runner"] == {
+        "mode": "single_flight",
+        "resource": "ssh_default",
+        "state": "waiting",
+        "auto_dispatch": True,
+        "trigger": None,
+    }
     assert job_detail["started_at"] is None
     assert not (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
@@ -442,7 +448,13 @@ def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -
     assert result["previous_status"] == "queued"
     assert result["new_status"] == "needs_review"
     assert result["queue_position"] == 0
-    assert result["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "released"}
+    assert result["runner"] == {
+        "mode": "single_flight",
+        "resource": "ssh_default",
+        "state": "released",
+        "auto_dispatch": True,
+        "trigger": "manual",
+    }
     dispatched_detail = client.get(f"/api/jobs/{queued_job['id']}").json()
     assert dispatched_detail["status"] == "succeeded"
     assert dispatched_detail["phase"] == "awaiting_review"
@@ -452,6 +464,119 @@ def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -
     assert lyrics_stage["status"] == "needs_review"
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{queued_job['id']}.json").exists()
     assert not lock_file.exists()
+
+
+def test_submit_job_auto_drains_existing_ssh_queue_before_new_job(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    series = create_minimal_series(client)
+    older_project = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Older queue song",
+        topic="colors",
+        objective="child repeats color words",
+        vocabulary=["red", "blue"],
+    )
+    client.post(f"/api/projects/{older_project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    lock_file = locks_dir / "ssh_default.json"
+    lock_file.write_text(
+        json.dumps(
+            {
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    job_projects: dict[str, str] = {}
+    run_order: list[str] = []
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if input and "<<'JSON'\n" in input:
+            manifest_text = input.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0]
+            manifest = json.loads(manifest_text)
+            job_projects[manifest["job_id"]] = manifest["project_id"]
+            run_order.append(manifest["job_id"])
+            return Completed(stdout="remote script completed\n")
+        if command[-1].startswith("cat ") and command[-1].endswith("output_manifest.json"):
+            job_id = command[-1].split("/jobs/", 1)[1].split("/", 1)[0]
+            return Completed(stdout=json.dumps(remote_output_fixture(job_projects[job_id])))
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    older_job = client.post(f"/api/projects/{older_project['id']}/jobs/lyrics.generate").json()
+    assert older_job["status"] == "queued"
+    assert run_order == []
+    queue_status = client.get("/api/queue/ssh-default").json()
+    assert queue_status["queued_count"] == 1
+    assert queue_status["queued_job_ids"] == [older_job["id"]]
+    assert queue_status["current_job_id"] == "remote_busy"
+
+    lock_file.unlink()
+    newer_project = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Newer queue song",
+        topic="shapes",
+        objective="child repeats shape words",
+        vocabulary=["circle", "square"],
+    )
+    client.post(f"/api/projects/{newer_project['id']}/stages/brief.generate/approve", json={})
+    newer_job = client.post(f"/api/projects/{newer_project['id']}/jobs/lyrics.generate").json()
+
+    older_detail = client.get(f"/api/jobs/{older_job['id']}").json()
+    newer_detail = client.get(f"/api/jobs/{newer_job['id']}").json()
+    assert run_order == [older_job["id"], newer_job["id"]]
+    assert older_detail["status"] == "succeeded"
+    assert older_detail["phase"] == "awaiting_review"
+    assert older_detail["queue_position"] == 0
+    assert newer_detail["status"] == "succeeded"
+    assert newer_detail["phase"] == "awaiting_review"
+    assert newer_detail["queue_position"] == 0
+    queue_status_after = client.get("/api/queue/ssh-default").json()
+    assert queue_status_after["queued_count"] == 0
+    assert queue_status_after["current_job_id"] is None
+    older_events = client.get(f"/api/jobs/{older_job['id']}/events").json()
+    assert [event["event"] for event in older_events] == [
+        "queued",
+        "lock_acquired",
+        "ssh_started",
+        "artifact_saved",
+        "completed",
+        "lock_released",
+        "auto_drain_triggered",
+    ]
+    assert client.get(f"/api/jobs/{older_job['id']}/events?after=3").json()[0]["event"] == "artifact_saved"
+    assert not lock_file.exists()
+    assert (tmp_path / "projects" / older_project["id"] / "remote-runs" / f"{older_job['id']}.json").exists()
+    assert (tmp_path / "projects" / newer_project["id"] / "remote-runs" / f"{newer_job['id']}.json").exists()
 
 
 def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path) -> None:
@@ -558,7 +683,13 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     assert job_detail["log_url"].endswith(f"/jobs/{job['id']}/log")
     assert job_detail["error"] is None
     assert job_detail["queue_position"] == 0
-    assert job_detail["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "released"}
+    assert job_detail["runner"] == {
+        "mode": "single_flight",
+        "resource": "ssh_default",
+        "state": "released",
+        "auto_dispatch": True,
+        "trigger": None,
+    }
     assert job_detail["started_at"] == job_detail["created_at"]
     assert job_detail["finished_at"] == job_detail["updated_at"]
 

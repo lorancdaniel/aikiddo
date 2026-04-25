@@ -236,11 +236,39 @@ export type GenerationJobDetail = {
     mode: "single_flight";
     resource: string;
     state: "waiting" | "acquired" | "released";
+    auto_dispatch: boolean;
+    trigger: "manual" | "auto_drain" | null;
   } | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   updated_at: string;
+};
+
+export type JobEvent = {
+  cursor: number;
+  job_id: string;
+  event: string;
+  message: string;
+  created_at: string;
+};
+
+export type WorkerQueueStatus = {
+  resource: string;
+  adapter: "ssh";
+  auto_dispatch: boolean;
+  queued_count: number;
+  queued_job_ids: string[];
+  current_lock: {
+    resource_key: string;
+    adapter: "ssh";
+    job_id: string;
+    acquired_at: string;
+    heartbeat_at: string;
+    lease_expires_at: string;
+  } | null;
+  current_job_id: string | null;
+  oldest_queued_job_id: string | null;
 };
 
 export type RemotePilotRun = {
@@ -545,6 +573,14 @@ export function runRemotePilot(projectId: string, stage = "lyrics.generate") {
 
 export function fetchJobDetail(jobId: string) {
   return request<GenerationJobDetail>(`/api/jobs/${jobId}`);
+}
+
+export function fetchJobEvents(jobId: string, after = 0) {
+  return request<JobEvent[]>(`/api/jobs/${jobId}/events?after=${after}`);
+}
+
+export function fetchSshQueueStatus() {
+  return request<WorkerQueueStatus>("/api/queue/ssh-default");
 }
 
 export function fetchJobArtifacts(projectId: string, jobId: string) {

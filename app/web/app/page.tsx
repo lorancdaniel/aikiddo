@@ -21,6 +21,7 @@ import {
   fetchJobArtifactText,
   fetchJobArtifacts,
   fetchJobDetail,
+  fetchJobEvents,
   fetchJobLog,
   fetchKeyframesArtifact,
   fetchProjectApprovals,
@@ -34,12 +35,14 @@ import {
   fetchLyricsArtifact,
   fetchReelsArtifact,
   fetchServerProfile,
+  fetchSshQueueStatus,
   fetchStoryboardArtifact,
   fetchVideoScenesArtifact,
   FullEpisodeArtifact,
   GenerationArtifact,
   GenerationJobDetail,
   Job,
+  JobEvent,
   JobLog,
   KeyframesArtifact,
   linkProjectSeries,
@@ -62,7 +65,8 @@ import {
   StageApproval,
   StoryboardArtifact,
   testServerConnection,
-  VideoScenesArtifact
+  VideoScenesArtifact,
+  WorkerQueueStatus
 } from "../lib/api";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
@@ -212,6 +216,8 @@ export default function Home() {
   const [serverJobDetail, setServerJobDetail] = useState<GenerationJobDetail | null>(null);
   const [serverArtifacts, setServerArtifacts] = useState<GenerationArtifact[]>([]);
   const [serverLog, setServerLog] = useState<JobLog | null>(null);
+  const [serverEvents, setServerEvents] = useState<JobEvent[]>([]);
+  const [queueStatus, setQueueStatus] = useState<WorkerQueueStatus | null>(null);
   const [artifactPreview, setArtifactPreview] = useState<{ artifactId: string; content: string } | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
@@ -278,6 +284,11 @@ export default function Home() {
         } catch {
           setServerProfile(null);
         }
+        try {
+          setQueueStatus(await fetchSshQueueStatus());
+        } catch {
+          setQueueStatus(null);
+        }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Nie udało się wczytać studia.");
       }
@@ -336,6 +347,8 @@ export default function Home() {
         const jobDetail = await fetchJobDetail(jobId);
         setServerJobDetail(jobDetail);
         setServerArtifacts(jobDetail.artifacts);
+        setServerEvents(await fetchJobEvents(jobId));
+        setQueueStatus(await fetchSshQueueStatus());
       } catch {
         window.clearInterval(interval);
       }
@@ -423,8 +436,10 @@ export default function Home() {
         const jobDetail = await fetchJobDetail(remoteRun.id);
         setServerJobDetail(jobDetail);
         setServerArtifacts(jobDetail.artifacts);
+        setServerEvents(await fetchJobEvents(jobDetail.id));
       } catch {
         setServerJobDetail(null);
+        setServerEvents([]);
       }
       try {
         setServerArtifacts(await fetchJobArtifacts(projectId, remoteRun.id));
@@ -441,7 +456,13 @@ export default function Home() {
       setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
+      setServerEvents([]);
       setArtifactPreview(null);
+    }
+    try {
+      setQueueStatus(await fetchSshQueueStatus());
+    } catch {
+      setQueueStatus(null);
     }
     try {
       setArtifactInventory(await fetchArtifactInventory(projectId));
@@ -496,6 +517,7 @@ export default function Home() {
       setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
+      setServerEvents([]);
       setArtifactPreview(null);
       setArtifactInventory([]);
       setProjectJobs([]);
@@ -520,7 +542,10 @@ export default function Home() {
       setProjects(updatedProjects);
       setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
       await loadArtifacts(selectedProject.id);
-      setServerJobDetail(await fetchJobDetail(job.id));
+      const jobDetail = await fetchJobDetail(job.id);
+      setServerJobDetail(jobDetail);
+      setServerEvents(await fetchJobEvents(job.id));
+      setQueueStatus(await fetchSshQueueStatus());
       setJobMessage(job.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
@@ -539,6 +564,7 @@ export default function Home() {
       setServerProfile(saved);
       const server = await testServerConnection();
       setConnection(server);
+      setQueueStatus(await fetchSshQueueStatus());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się zapisać profilu serwera.");
     } finally {
@@ -857,6 +883,20 @@ export default function Home() {
               {isRunningRemotePilot || runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Generuj na serwerze
             </button>
+            {queueStatus ? (
+              <div className="mt-4 grid gap-2 rounded-xl border border-white/10 bg-white/7 p-3 text-xs font-bold text-white/58">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Queue status</span>
+                  <span className="rounded-full bg-white/10 px-2 py-1 text-white/70">
+                    {queueStatus.queued_count} queued
+                  </span>
+                </div>
+                <div className="grid gap-1 text-white/42">
+                  <span>Lock: {queueStatus.current_job_id ?? "free"}</span>
+                  <span>Oldest: {queueStatus.oldest_queued_job_id ?? "none"}</span>
+                </div>
+              </div>
+            ) : null}
             {remotePilotRun || serverJobDetail ? (
               <div className="mt-4 grid gap-3 text-sm text-white/68">
                 <div className="rounded-xl bg-white/7 p-3">
@@ -873,12 +913,27 @@ export default function Home() {
                           Position {serverJobDetail.queue_position}
                         </span>
                       ) : null}
+                      {serverJobDetail.runner.auto_dispatch ? (
+                        <span className="rounded-full bg-[var(--teal)]/15 px-2 py-1 text-[var(--teal)]">
+                          Queue auto-dispatch enabled
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                   {serverJobDetail?.error ? (
                     <p className="mt-2 rounded-lg bg-[var(--coral)]/18 px-2 py-1 text-xs font-bold text-[var(--coral)]">
                       {serverJobDetail.error.message}
                     </p>
+                  ) : null}
+                  {serverEvents.length ? (
+                    <div className="mt-3 grid gap-1 border-t border-white/10 pt-3 text-xs text-white/48">
+                      {serverEvents.slice(-5).map((event) => (
+                        <div key={event.cursor} className="flex items-center justify-between gap-3">
+                          <span className="font-black text-white/64">{event.event}</span>
+                          <span>{new Date(event.created_at).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}</span>
+                        </div>
+                      ))}
+                    </div>
                   ) : null}
                 </div>
                 {(serverJobDetail?.preview ?? remotePilotRun?.preview) ? (

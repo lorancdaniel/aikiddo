@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, RemotePilotRun, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StageStatus, StoryboardArtifact, VideoScenesArtifact, WorkerLock, utc_now
+from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, JobEvent, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, RemotePilotRun, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StageStatus, StoryboardArtifact, VideoScenesArtifact, WorkerLock, utc_now
 
 
 ARTIFACT_MANIFESTS = [
@@ -116,10 +116,43 @@ class ProjectStorage:
         jobs = [Job.model_validate_json(job_file.read_text(encoding="utf-8")) for job_file in sorted(jobs_dir.glob("*.json"))]
         return sorted(jobs, key=lambda job: job.created_at)
 
+    def job_events_file(self, job: Job) -> Path:
+        return self.project_dir(job.project_id) / "jobs" / f"{job.id}.events.jsonl"
+
+    def append_job_event(self, job: Job, event: str, message: str) -> JobEvent:
+        events = self.list_job_events(job.id)
+        job_event = JobEvent(
+            cursor=len(events) + 1,
+            job_id=job.id,
+            event=event,
+            message=message,
+            created_at=utc_now(),
+        )
+        events_file = self.job_events_file(job)
+        events_file.parent.mkdir(parents=True, exist_ok=True)
+        with events_file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(job_event.model_dump(mode="json"), ensure_ascii=False) + "\n")
+        return job_event
+
+    def list_job_events(self, job_id: str, after: int = 0) -> list[JobEvent]:
+        job = self.get_job(job_id)
+        if job is None:
+            return []
+        events_file = self.job_events_file(job)
+        if not events_file.exists():
+            return []
+        events = [
+            JobEvent.model_validate_json(line)
+            for line in events_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return [event for event in events if event.cursor > after]
+
     def list_all_jobs(self) -> list[Job]:
         jobs = [
             Job.model_validate_json(job_file.read_text(encoding="utf-8"))
             for job_file in sorted(self.projects_root.glob("*/jobs/*.json"))
+            if not job_file.name.endswith(".events.jsonl")
         ]
         return sorted(jobs, key=lambda job: job.created_at)
 
