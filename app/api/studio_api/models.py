@@ -507,6 +507,12 @@ class GenerationPreview(BaseModel):
     safety_notes: list[str]
 
 
+class GenerationRunnerState(BaseModel):
+    mode: Literal["single_flight"]
+    resource: str
+    state: Literal["waiting", "acquired", "released"]
+
+
 class GenerationJobDetail(BaseModel):
     id: str
     job_id: str
@@ -520,10 +526,21 @@ class GenerationJobDetail(BaseModel):
     artifacts: list[GenerationArtifactView] = Field(default_factory=list)
     log_url: str | None = None
     error: dict | None = None
+    queue_position: int = 0
+    runner: GenerationRunnerState | None = None
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
     updated_at: str
+
+
+class WorkerLock(BaseModel):
+    resource_key: str
+    adapter: Literal["ssh"]
+    job_id: str
+    acquired_at: str
+    heartbeat_at: str
+    lease_expires_at: str
 
 
 class RemotePilotRun(BaseModel):

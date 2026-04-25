@@ -306,6 +306,74 @@ def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, 
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
 
+def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Queued server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    (locks_dir / "ssh_default.json").write_text(
+        json.dumps(
+            {
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("SSH worker should not run while the single-flight slot is busy")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    response = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate")
+
+    assert response.status_code == 202
+    job = response.json()
+    assert job["status"] == "queued"
+    assert job["adapter"] == "ssh"
+    assert job["message"] == "Waiting for SSH worker slot."
+    project_after_job = client.get(f"/api/projects/{project['id']}").json()
+    lyrics_stage = next(stage for stage in project_after_job["pipeline"] if stage["stage"] == "lyrics.generate")
+    assert lyrics_stage["status"] == "queued"
+    assert lyrics_stage["job_id"] == job["id"]
+    job_detail = client.get(f"/api/jobs/{job['id']}").json()
+    assert job_detail["status"] == "queued"
+    assert job_detail["phase"] == "waiting_for_worker"
+    assert job_detail["queue_position"] == 1
+    assert job_detail["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "waiting"}
+    assert job_detail["started_at"] is None
+    assert not (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
+
+
 def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monkeypatch) -> None:
     client = make_client(tmp_path)
     project = client.post(
@@ -379,6 +447,8 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     assert job_detail["artifacts"][0]["download_url"].endswith(f"/jobs/{job['id']}/artifacts/lyrics_txt")
     assert job_detail["log_url"].endswith(f"/jobs/{job['id']}/log")
     assert job_detail["error"] is None
+    assert job_detail["queue_position"] == 0
+    assert job_detail["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "released"}
     assert job_detail["started_at"] == job_detail["created_at"]
     assert job_detail["finished_at"] == job_detail["updated_at"]
 

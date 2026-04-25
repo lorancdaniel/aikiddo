@@ -231,6 +231,12 @@ export type GenerationJobDetail = {
   artifacts: GenerationArtifactView[];
   log_url: string | null;
   error: { code: string; message: string } | null;
+  queue_position: number;
+  runner: {
+    mode: "single_flight";
+    resource: string;
+    state: "waiting" | "acquired" | "released";
+  } | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

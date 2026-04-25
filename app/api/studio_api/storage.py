@@ -1,8 +1,8 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, RemotePilotRun, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, RemotePilotRun, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StageStatus, StoryboardArtifact, VideoScenesArtifact, WorkerLock, utc_now
 
 
 ARTIFACT_MANIFESTS = [
@@ -22,6 +22,10 @@ ARTIFACT_MANIFESTS = [
 
 def utc_now_from_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+
+
+def parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 class ProjectStorage:
@@ -111,6 +115,16 @@ class ProjectStorage:
             return []
         jobs = [Job.model_validate_json(job_file.read_text(encoding="utf-8")) for job_file in sorted(jobs_dir.glob("*.json"))]
         return sorted(jobs, key=lambda job: job.created_at)
+
+    def list_all_jobs(self) -> list[Job]:
+        jobs = [
+            Job.model_validate_json(job_file.read_text(encoding="utf-8"))
+            for job_file in sorted(self.projects_root.glob("*/jobs/*.json"))
+        ]
+        return sorted(jobs, key=lambda job: job.created_at)
+
+    def list_queued_ssh_jobs(self) -> list[Job]:
+        return [job for job in self.list_all_jobs() if job.adapter == "ssh" and job.status == StageStatus.QUEUED]
 
     def save_lyrics(self, project_id: str, lyrics: LyricsArtifact) -> LyricsArtifact:
         (self.project_dir(project_id) / "lyrics.json").write_text(
@@ -277,6 +291,54 @@ class ProjectStorage:
         if not matches:
             return None
         return Job.model_validate_json(matches[0].read_text(encoding="utf-8"))
+
+    def worker_locks_dir(self) -> Path:
+        directory = self.studio_dir / "worker-locks"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def worker_lock_file(self, resource_key: str) -> Path:
+        return self.worker_locks_dir() / f"{resource_key}.json"
+
+    def get_worker_lock(self, resource_key: str) -> WorkerLock | None:
+        lock_file = self.worker_lock_file(resource_key)
+        if not lock_file.exists():
+            return None
+        lock = WorkerLock.model_validate_json(lock_file.read_text(encoding="utf-8"))
+        if parse_utc(lock.lease_expires_at) <= datetime.now(timezone.utc):
+            lock_file.unlink(missing_ok=True)
+            return None
+        return lock
+
+    def acquire_worker_lock(self, resource_key: str, job_id: str, lease_seconds: int = 900) -> WorkerLock | None:
+        existing = self.get_worker_lock(resource_key)
+        if existing is not None:
+            return None
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        lock = WorkerLock(
+            resource_key=resource_key,
+            adapter="ssh",
+            job_id=job_id,
+            acquired_at=now,
+            heartbeat_at=now,
+            lease_expires_at=(now_dt + timedelta(seconds=lease_seconds)).isoformat(),
+        )
+        lock_file = self.worker_lock_file(resource_key)
+        try:
+            with lock_file.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(lock.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        except FileExistsError:
+            return None
+        return lock
+
+    def release_worker_lock(self, resource_key: str, job_id: str) -> None:
+        lock_file = self.worker_lock_file(resource_key)
+        if not lock_file.exists():
+            return
+        lock = WorkerLock.model_validate_json(lock_file.read_text(encoding="utf-8"))
+        if lock.job_id == job_id:
+            lock_file.unlink(missing_ok=True)
 
     def save_stage_approval(self, approval: StageApproval) -> StageApproval:
         reviews_dir = self.project_dir(approval.project_id) / "reviews"

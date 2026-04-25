@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from .models import (
     GenerationArtifact,
     GenerationArtifactView,
     GenerationJobDetail,
+    GenerationRunnerState,
     HUMAN_REVIEW_STAGES,
     Job,
     KeyframesArtifact,
@@ -139,12 +141,32 @@ def normalize_job_status(status_value: StageStatus) -> tuple[str, str]:
     return "succeeded", "completed"
 
 
+SSH_WORKER_RESOURCE = "ssh_default"
+
+
 def create_app(projects_root: Path | None = None) -> FastAPI:
     configured_root = os.getenv("STUDIO_PROJECTS_ROOT")
     default_root = Path(configured_root) if configured_root else Path(__file__).resolve().parents[3] / "projects"
     storage = ProjectStorage(projects_root or default_root)
     mock_server = MockGpuServer()
     ssh_server = SshGenerationServer()
+
+    def set_pipeline_stage(project: Project, stage: str, job: Job) -> None:
+        for pipeline_stage in project.pipeline:
+            if pipeline_stage.stage == stage:
+                pipeline_stage.status = job.status
+                pipeline_stage.job_id = job.id
+                pipeline_stage.updated_at = utc_now()
+                break
+
+    def queue_position_for(job: Job) -> int:
+        if job.adapter != "ssh" or job.status != StageStatus.QUEUED:
+            return 0
+        queued_jobs = storage.list_queued_ssh_jobs()
+        for index, queued_job in enumerate(queued_jobs, start=1):
+            if queued_job.id == job.id:
+                return index
+        return 0
 
     app = FastAPI(title="AI Kids Music Studio API", version="0.1.0")
     app.add_middleware(
@@ -400,20 +422,43 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
         profile = storage.get_server_profile()
         if profile is not None and profile.mode == "ssh":
-            remote_run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=stage, profile=profile)
-            storage.save_remote_pilot_run(project_id, remote_run)
-            job_status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
             job = Job(
-                id=remote_run.id,
+                id=f"remote_{uuid4().hex[:12]}",
                 project_id=project_id,
                 stage=stage,
-                status=job_status,
+                status=StageStatus.QUEUED,
                 adapter="ssh",
-                message=remote_run.message,
-                created_at=remote_run.created_at,
-                updated_at=remote_run.updated_at,
+                message="Waiting for SSH worker slot.",
+                created_at=utc_now(),
+                updated_at=utc_now(),
             )
+            lock = storage.acquire_worker_lock(SSH_WORKER_RESOURCE, job.id)
+            if lock is None:
+                storage.save_job(job)
+                set_pipeline_stage(project, stage, job)
+                storage.save_project(project)
+                return job
+
+            job.status = StageStatus.RUNNING
+            job.message = "SSH worker acquired; generating server artifacts."
+            job.updated_at = utc_now()
             storage.save_job(job)
+            set_pipeline_stage(project, stage, job)
+            storage.save_project(project)
+            try:
+                remote_run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=stage, profile=profile, job_id=job.id)
+                storage.save_remote_pilot_run(project_id, remote_run)
+                job.status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
+                job.message = remote_run.message
+                job.updated_at = remote_run.updated_at
+                storage.save_job(job)
+            except Exception as exc:
+                job.status = StageStatus.FAILED
+                job.message = str(exc) or "SSH worker failed."
+                job.updated_at = utc_now()
+                storage.save_job(job)
+            finally:
+                storage.release_worker_lock(SSH_WORKER_RESOURCE, job.id)
         else:
             job = mock_server.submit_job(project_id=project_id, stage=stage)
             storage.save_job(job)
@@ -444,12 +489,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                         storage.get_compliance_report(project_id),
                     ),
                 )
-        for pipeline_stage in project.pipeline:
-            if pipeline_stage.stage == stage:
-                pipeline_stage.status = job.status
-                pipeline_stage.job_id = job.id
-                pipeline_stage.updated_at = utc_now()
-                break
+        set_pipeline_stage(project, stage, job)
         storage.save_project(project)
         return job
 
@@ -534,6 +574,17 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
     def build_generation_job_detail(job: Job) -> GenerationJobDetail:
         normalized_status, phase = normalize_job_status(job.status)
+        queue_position = queue_position_for(job)
+        runner = None
+        if job.adapter == "ssh":
+            if job.status == StageStatus.QUEUED:
+                phase = "waiting_for_worker"
+                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="waiting")
+            elif job.status == StageStatus.RUNNING:
+                phase = "generating_artifact"
+                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="acquired")
+            else:
+                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released")
         run = storage.get_remote_pilot_run(job.project_id, job.id) if job.adapter == "ssh" else None
         artifacts = [
             GenerationArtifactView(
@@ -557,8 +608,10 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             artifacts=artifacts,
             log_url=f"/api/projects/{job.project_id}/jobs/{job.id}/log" if run is not None else None,
             error=error,
+            queue_position=queue_position,
+            runner=runner,
             created_at=job.created_at,
-            started_at=job.created_at if job.adapter == "ssh" else None,
+            started_at=job.created_at if job.adapter == "ssh" and normalized_status != "queued" else None,
             finished_at=finished_at,
             updated_at=job.updated_at,
         )

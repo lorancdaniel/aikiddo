@@ -328,12 +328,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!remotePilotRun) return;
     if (serverJobDetail?.status !== "queued" && serverJobDetail?.status !== "running") return;
+    const jobId = serverJobDetail.id;
 
     const interval = window.setInterval(async () => {
       try {
-        const jobDetail = await fetchJobDetail(remotePilotRun.id);
+        const jobDetail = await fetchJobDetail(jobId);
         setServerJobDetail(jobDetail);
         setServerArtifacts(jobDetail.artifacts);
       } catch {
@@ -342,7 +342,7 @@ export default function Home() {
     }, 2000);
 
     return () => window.clearInterval(interval);
-  }, [remotePilotRun, serverJobDetail?.status]);
+  }, [serverJobDetail?.id, serverJobDetail?.status]);
 
   const selectedSummary = useMemo(() => {
     if (!selectedProject) return "Brak projektu";
@@ -520,6 +520,7 @@ export default function Home() {
       setProjects(updatedProjects);
       setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
       await loadArtifacts(selectedProject.id);
+      setServerJobDetail(await fetchJobDetail(job.id));
       setJobMessage(job.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
@@ -856,26 +857,38 @@ export default function Home() {
               {isRunningRemotePilot || runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Generuj na serwerze
             </button>
-            {remotePilotRun ? (
+            {remotePilotRun || serverJobDetail ? (
               <div className="mt-4 grid gap-3 text-sm text-white/68">
                 <div className="rounded-xl bg-white/7 p-3">
                   <p className="font-black text-white">Job</p>
-                  <p className="mt-1 break-all text-xs text-white/48">{remotePilotRun.id}</p>
+                  <p className="mt-1 break-all text-xs text-white/48">{serverJobDetail?.id ?? remotePilotRun?.id}</p>
                   {serverJobDetail ? <p className="mt-2 text-xs font-bold text-white/42">{serverJobDetail.phase}</p> : null}
+                  {serverJobDetail?.runner ? (
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs font-black">
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-white/54">
+                        {serverJobDetail.runner.state === "waiting" ? "SSH worker busy" : serverJobDetail.runner.state === "acquired" ? "SSH worker acquired" : "SSH worker released"}
+                      </span>
+                      {serverJobDetail.queue_position > 0 ? (
+                        <span className="rounded-full bg-[var(--acid)]/15 px-2 py-1 text-[var(--acid)]">
+                          Position {serverJobDetail.queue_position}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {serverJobDetail?.error ? (
                     <p className="mt-2 rounded-lg bg-[var(--coral)]/18 px-2 py-1 text-xs font-bold text-[var(--coral)]">
                       {serverJobDetail.error.message}
                     </p>
                   ) : null}
                 </div>
-                {(serverJobDetail?.preview ?? remotePilotRun.preview) ? (
+                {(serverJobDetail?.preview ?? remotePilotRun?.preview) ? (
                   <div className="rounded-xl border border-white/10 bg-white/7 p-3" data-testid="server-preview">
-                    <p className="font-black text-white">{(serverJobDetail?.preview ?? remotePilotRun.preview)?.title}</p>
+                    <p className="font-black text-white">{(serverJobDetail?.preview ?? remotePilotRun?.preview)?.title}</p>
                     <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-white/62">
-                      {(serverJobDetail?.preview ?? remotePilotRun.preview)?.lyrics}
+                      {(serverJobDetail?.preview ?? remotePilotRun?.preview)?.lyrics}
                     </pre>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {(serverJobDetail?.preview ?? remotePilotRun.preview)?.safety_notes.map((note) => (
+                      {(serverJobDetail?.preview ?? remotePilotRun?.preview)?.safety_notes.map((note) => (
                         <span key={note} className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white/62">
                           {note}
                         </span>
@@ -887,9 +900,10 @@ export default function Home() {
                   <div className="grid gap-2">
                     {serverArtifacts.map((artifact) => {
                       const canPreview = artifact.mime_type.startsWith("text/") || artifact.mime_type === "application/json";
+                      const jobId = serverJobDetail?.id ?? remotePilotRun?.id;
                       const downloadUrl =
-                        selectedProject && remotePilotRun
-                          ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${remotePilotRun.id}/artifacts/${artifact.artifact_id}`)
+                        selectedProject && jobId
+                          ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${jobId}/artifacts/${artifact.artifact_id}`)
                           : "";
 
                       return (
@@ -926,7 +940,7 @@ export default function Home() {
                       );
                     })}
                   </div>
-                ) : remotePilotRun.output_files.length ? (
+                ) : remotePilotRun?.output_files.length ? (
                   <div className="grid gap-2">
                     {remotePilotRun.output_files.map((file) => (
                       <p key={file} className="break-all rounded-xl bg-[var(--mist)] px-3 py-2 text-xs font-bold text-[var(--ink)]">
@@ -943,11 +957,11 @@ export default function Home() {
                     </pre>
                   </div>
                 ) : null}
-                {(serverLog?.lines.length ?? remotePilotRun.logs.length) ? (
+                {(serverLog?.lines.length ?? remotePilotRun?.logs.length ?? 0) ? (
                   <div className="rounded-xl border border-white/10 bg-black/22 p-3">
                     <p className="font-black text-white">Log</p>
                     <div className="mt-2 space-y-1 text-xs text-white/52">
-                      {(serverLog?.lines ?? remotePilotRun.logs).map((line) => (
+                      {(serverLog?.lines ?? remotePilotRun?.logs ?? []).map((line) => (
                         <p key={line}>{line}</p>
                       ))}
                     </div>

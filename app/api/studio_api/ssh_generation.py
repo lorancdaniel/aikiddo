@@ -30,9 +30,9 @@ class SshGenerationServer:
             return ServerConnection(mode="ssh", reachable=False, message=message)
         return ServerConnection(mode="ssh", reachable=True, message=result.stdout.strip())
 
-    def run_remote_pilot(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile) -> RemotePilotRun:
+    def run_remote_pilot(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile, job_id: str | None = None) -> RemotePilotRun:
         now = utc_now()
-        job_id = f"remote_{uuid4().hex[:12]}"
+        job_id = job_id or f"remote_{uuid4().hex[:12]}"
         remote_job_dir = f"{profile.remote_root.rstrip('/')}/jobs/{job_id}"
         job_manifest_path = f"{remote_job_dir}/job_manifest.json"
         output_manifest_path = f"{remote_job_dir}/output_manifest.json"
