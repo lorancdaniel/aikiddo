@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .anti_repetition import build_anti_repetition_report
@@ -14,6 +14,7 @@ from .models import (
     EpisodeSpec,
     EpisodeSpecInput,
     FullEpisodeArtifact,
+    GenerationArtifact,
     HUMAN_REVIEW_STAGES,
     Job,
     KeyframesArtifact,
@@ -435,6 +436,54 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                 break
         storage.save_project(project)
         return job
+
+    @app.get("/api/projects/{project_id}/jobs/{job_id}/artifacts", response_model=list[GenerationArtifact])
+    def list_job_artifacts(project_id: str, job_id: str) -> list[GenerationArtifact]:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        run = storage.get_remote_pilot_run(project_id, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Remote job not found")
+        return run.artifacts
+
+    @app.get("/api/projects/{project_id}/jobs/{job_id}/log")
+    def get_job_log(project_id: str, job_id: str) -> dict[str, list[str] | str]:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        run = storage.get_remote_pilot_run(project_id, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Remote job not found")
+        profile = storage.get_server_profile()
+        if profile is not None and profile.mode == "ssh":
+            log_text = ssh_server.fetch_log(profile, run)
+            return {"job_id": job_id, "log": log_text, "lines": log_text.splitlines()}
+        return {"job_id": job_id, "log": "\n".join(run.logs), "lines": run.logs}
+
+    @app.get("/api/projects/{project_id}/jobs/{job_id}/artifacts/{artifact_id}")
+    def get_job_artifact(project_id: str, job_id: str, artifact_id: str) -> Response:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        run = storage.get_remote_pilot_run(project_id, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Remote job not found")
+        profile = storage.get_server_profile()
+        if profile is None or profile.mode != "ssh":
+            raise HTTPException(status_code=409, detail="SSH server profile is required to read server artifacts")
+        try:
+            artifact, content = ssh_server.fetch_artifact(profile, run, artifact_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Artifact not found") from None
+        return Response(
+            content=content,
+            media_type=artifact.mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+                "X-Artifact-SHA256": artifact.sha256,
+            },
+        )
 
     @app.post("/api/projects/{project_id}/stages/{stage}/approve", response_model=Project)
     def approve_stage(project_id: str, stage: str, approval_input: StageApprovalInput) -> Project:

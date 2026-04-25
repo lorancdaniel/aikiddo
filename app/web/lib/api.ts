@@ -196,20 +196,45 @@ export type ServerProfile = {
 
 export type ServerProfileInput = Omit<ServerProfile, "updated_at">;
 
+export type GenerationArtifact = {
+  artifact_id: string;
+  type: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  storage_key: string;
+  public: boolean;
+};
+
 export type RemotePilotRun = {
   id: string;
   project_id: string;
   stage: string;
+  schema_version: string;
   status: "completed" | "failed";
   adapter: "ssh";
   remote_job_dir: string;
   job_manifest_path: string;
   output_manifest_path: string;
   output_files: string[];
+  artifacts: GenerationArtifact[];
+  preview: {
+    title: string;
+    lyrics: string;
+    song_plan: Record<string, unknown>;
+    safety_notes: string[];
+  } | null;
   message: string;
   logs: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type JobLog = {
+  job_id: string;
+  log: string;
+  lines: string[];
 };
 
 export type LyricsArtifact = {
@@ -480,6 +505,26 @@ export function runRemotePilot(projectId: string, stage = "lyrics.generate") {
   return request<RemotePilotRun>(`/api/projects/${projectId}/remote-pilot`, {
     method: "POST",
     body: JSON.stringify({ stage })
+  });
+}
+
+export function fetchJobArtifacts(projectId: string, jobId: string) {
+  return request<GenerationArtifact[]>(`/api/projects/${projectId}/jobs/${jobId}/artifacts`);
+}
+
+export function fetchJobLog(projectId: string, jobId: string) {
+  return request<JobLog>(`/api/projects/${projectId}/jobs/${jobId}/log`);
+}
+
+export function fetchJobArtifactText(projectId: string, jobId: string, artifactId: string) {
+  return fetch(`${API_URL}/api/projects/${projectId}/jobs/${jobId}/artifacts/${artifactId}`, {
+    headers: { Accept: "text/plain, application/json" }
+  }).then(async (response) => {
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Request failed: ${response.status}`);
+    }
+    return response.text();
   });
 }
 

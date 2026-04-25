@@ -3,7 +3,7 @@ import shlex
 import subprocess
 from uuid import uuid4
 
-from .models import Brief, RemotePilotRun, ServerConnection, ServerProfile, utc_now
+from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun, ServerConnection, ServerProfile, utc_now
 
 
 class SshGenerationServer:
@@ -35,14 +35,23 @@ class SshGenerationServer:
         remote_job_dir = f"{profile.remote_root.rstrip('/')}/jobs/{job_id}"
         job_manifest_path = f"{remote_job_dir}/job_manifest.json"
         output_manifest_path = f"{remote_job_dir}/output_manifest.json"
-        artifact_path = f"{remote_job_dir}/pilot-artifact.txt"
         job_manifest = {
-            "schema_version": "job-contract-v1",
+            "schema_version": "job.v1",
             "job_id": job_id,
             "project_id": project_id,
             "stage": stage,
+            "job_type": "kids_song_pilot",
             "adapter": self.adapter,
-            "storage_policy": "server",
+            "generation": {
+                "runner": "remote_ssh",
+                "mode": "real",
+                "timeout_sec": 600,
+            },
+            "storage": {
+                "server_owned": True,
+                "artifact_root_policy": "project/job scoped",
+                "client_may_upload_outputs": False,
+            },
             "brief": brief.model_dump(mode="json"),
             "created_at": now,
         }
@@ -55,6 +64,7 @@ cat > "$job_dir/job_manifest.json" <<'JSON'
 JSON
 python3 - "$job_dir" <<'PY'
 import json
+import hashlib
 import pathlib
 import socket
 import sys
@@ -62,19 +72,75 @@ from datetime import datetime, timezone
 
 job_dir = pathlib.Path(sys.argv[1])
 manifest = json.loads((job_dir / "job_manifest.json").read_text(encoding="utf-8"))
-artifact_path = job_dir / "pilot-artifact.txt"
-artifact_path.write_text(
+brief = manifest["brief"]
+
+lyrics = "\\n".join([
+    brief["title"],
+    "",
+    "[Verse]",
+    "We name it slowly, then we sing it clear,",
+    "Small bright words that little voices hear.",
+    "",
+    "[Chorus]",
+    brief["topic"].capitalize() + " in the rhythm, one more time,",
+    "Clap it, say it, keep it kind.",
+]) + "\\n"
+song_plan = {{
+    "title": brief["title"],
+    "topic": brief["topic"],
+    "age_range": brief["age_range"],
+    "stage": manifest["stage"],
+    "duration_target_sec": 60,
+    "sections": ["verse", "chorus"],
+    "storage_policy": "server",
+}}
+safety_notes = {{
+    "status": "ready_for_human_review",
+    "checks": [
+        "age range is explicit",
+        "educational topic is explicit",
+        "no direct publishing without human approval",
+    ],
+    "host": socket.gethostname(),
+}}
+preview = {{
+    "title": brief["title"],
+    "lyrics": lyrics,
+    "song_plan": song_plan,
+    "safety_notes": safety_notes["checks"],
+}}
+files = [
+    ("lyrics_txt", "lyrics", "lyrics.txt", "text/plain", lyrics),
+    ("song_plan_json", "song_plan", "song_plan.json", "application/json", json.dumps(song_plan, ensure_ascii=False, indent=2) + "\\n"),
+    ("safety_notes_json", "safety_notes", "safety_notes.json", "application/json", json.dumps(safety_notes, ensure_ascii=False, indent=2) + "\\n"),
+]
+artifacts = []
+for artifact_id, artifact_type, filename, mime_type, content in files:
+    path = job_dir / filename
+    path.write_text(content, encoding="utf-8")
+    payload = path.read_bytes()
+    artifacts.append({{
+        "artifact_id": artifact_id,
+        "type": artifact_type,
+        "filename": filename,
+        "mime_type": mime_type,
+        "size_bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/" + filename,
+        "public": False,
+    }})
+worker_log = job_dir / "worker.log"
+worker_log.write_text(
     "\\n".join([
-        "project_id=" + manifest["project_id"],
+        "job=" + manifest["job_id"],
         "stage=" + manifest["stage"],
-        "title=" + manifest["brief"]["title"],
-        "topic=" + manifest["brief"]["topic"],
-        "host=" + socket.gethostname(),
+        "artifacts=lyrics.txt,song_plan.json,safety_notes.json",
+        "storage=server",
     ]) + "\\n",
     encoding="utf-8",
 )
 output = {{
-    "schema_version": "job-contract-v1",
+    "schema_version": "output.v1",
     "job_id": manifest["job_id"],
     "project_id": manifest["project_id"],
     "stage": manifest["stage"],
@@ -82,8 +148,18 @@ output = {{
     "adapter": "ssh",
     "storage_policy": "server",
     "remote_job_dir": str(job_dir),
-    "output_files": [str(artifact_path)],
-    "logs": ["remote pilot wrote job_manifest.json", "remote pilot wrote pilot-artifact.txt"],
+    "output_files": [artifact["storage_key"] for artifact in artifacts],
+    "artifacts": artifacts,
+    "preview": preview,
+    "logs": [
+        "remote worker wrote job_manifest.json",
+        "remote worker wrote lyrics.txt",
+        "remote worker wrote song_plan.json",
+        "remote worker wrote safety_notes.json",
+    ],
+    "log": {{
+        "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/worker.log",
+    }},
     "generated_at": datetime.now(timezone.utc).isoformat(),
 }}
 (job_dir / "output_manifest.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -109,6 +185,8 @@ PY
                 job_manifest_path=job_manifest_path,
                 output_manifest_path=output_manifest_path,
                 output_files=[],
+                artifacts=[],
+                preview=None,
                 message=script_result.stderr.strip() or "Remote pilot failed",
                 logs=[line for line in [script_result.stdout.strip(), script_result.stderr.strip()] if line],
                 created_at=now,
@@ -132,9 +210,39 @@ PY
             remote_job_dir=output.get("remote_job_dir", remote_job_dir),
             job_manifest_path=job_manifest_path,
             output_manifest_path=output_manifest_path,
-            output_files=output.get("output_files", [artifact_path]),
-            message="Remote pilot completed on SSH worker.",
+            output_files=output.get("output_files", []),
+            artifacts=[GenerationArtifact.model_validate(artifact) for artifact in output.get("artifacts", [])],
+            preview=GenerationPreview.model_validate(output["preview"]) if output.get("preview") else None,
+            message="Server generation completed.",
             logs=output.get("logs", [script_result.stdout.strip()]),
             created_at=now,
             updated_at=utc_now(),
         )
+
+    def fetch_artifact(self, profile: ServerProfile, run: RemotePilotRun, artifact_id: str) -> tuple[GenerationArtifact, bytes]:
+        artifact = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
+        if artifact is None:
+            raise FileNotFoundError(artifact_id)
+        remote_path = f"{run.remote_job_dir.rstrip('/')}/{artifact.filename}"
+        result = subprocess.run(
+            [*self._ssh_base_command(profile), f"cat {shlex.quote(remote_path)}"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise FileNotFoundError(artifact_id)
+        return artifact, result.stdout
+
+    def fetch_log(self, profile: ServerProfile, run: RemotePilotRun) -> str:
+        remote_path = f"{run.remote_job_dir.rstrip('/')}/worker.log"
+        result = subprocess.run(
+            [*self._ssh_base_command(profile), f"cat {shlex.quote(remote_path)}"],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            return "\n".join(run.logs)
+        return result.stdout

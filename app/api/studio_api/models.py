@@ -485,16 +485,37 @@ class RemotePilotInput(BaseModel):
     stage: str = Field(default="lyrics.generate", min_length=1, max_length=120)
 
 
+class GenerationArtifact(BaseModel):
+    artifact_id: str
+    type: str
+    filename: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    storage_key: str
+    public: bool = False
+
+
+class GenerationPreview(BaseModel):
+    title: str
+    lyrics: str
+    song_plan: dict
+    safety_notes: list[str]
+
+
 class RemotePilotRun(BaseModel):
     id: str
     project_id: str
     stage: str
+    schema_version: str = "output.v1"
     status: Literal["completed", "failed"]
     adapter: Literal["ssh"]
     remote_job_dir: str
     job_manifest_path: str
     output_manifest_path: str
     output_files: list[str]
+    artifacts: list[GenerationArtifact] = Field(default_factory=list)
+    preview: GenerationPreview | None = None
     message: str
     logs: list[str]
     created_at: str

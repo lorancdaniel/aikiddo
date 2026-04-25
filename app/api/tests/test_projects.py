@@ -83,6 +83,64 @@ def create_project_with_episode_spec(
     return client.get(f"/api/projects/{project['id']}").json()
 
 
+def remote_output_fixture(project_id: str, stage: str = "lyrics.generate") -> dict:
+    return {
+        "schema_version": "output.v1",
+        "job_id": "remote_job_from_fixture",
+        "project_id": project_id,
+        "stage": stage,
+        "status": "completed",
+        "adapter": "ssh",
+        "storage_policy": "server",
+        "remote_job_dir": "/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture",
+        "output_files": [
+            f"projects/{project_id}/jobs/remote_job_from_fixture/lyrics.txt",
+            f"projects/{project_id}/jobs/remote_job_from_fixture/song_plan.json",
+            f"projects/{project_id}/jobs/remote_job_from_fixture/safety_notes.json",
+        ],
+        "artifacts": [
+            {
+                "artifact_id": "lyrics_txt",
+                "type": "lyrics",
+                "filename": "lyrics.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 42,
+                "sha256": "sha-lyrics",
+                "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/lyrics.txt",
+                "public": False,
+            },
+            {
+                "artifact_id": "song_plan_json",
+                "type": "song_plan",
+                "filename": "song_plan.json",
+                "mime_type": "application/json",
+                "size_bytes": 64,
+                "sha256": "sha-song-plan",
+                "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/song_plan.json",
+                "public": False,
+            },
+            {
+                "artifact_id": "safety_notes_json",
+                "type": "safety_notes",
+                "filename": "safety_notes.json",
+                "mime_type": "application/json",
+                "size_bytes": 64,
+                "sha256": "sha-safety",
+                "storage_key": f"projects/{project_id}/jobs/remote_job_from_fixture/safety_notes.json",
+                "public": False,
+            },
+        ],
+        "preview": {
+            "title": "Server lyrics",
+            "lyrics": "Colors in the rhythm\n",
+            "song_plan": {"duration_target_sec": 60, "sections": ["verse", "chorus"]},
+            "safety_notes": ["ready for human review"],
+        },
+        "logs": ["fixture completed"],
+        "generated_at": "2026-04-25T20:00:00+00:00",
+    }
+
+
 def test_health_reports_mock_adapter(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
@@ -150,21 +208,7 @@ def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatc
     def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
         calls.append({"command": command, "input": input})
         if command[-1].startswith("cat "):
-            return Completed(
-                stdout=json.dumps(
-                    {
-                        "job_id": "remote_job_from_fixture",
-                        "project_id": project["id"],
-                        "stage": "lyrics.generate",
-                        "status": "completed",
-                        "adapter": "ssh",
-                        "remote_job_dir": "/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture",
-                        "output_files": ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"],
-                        "logs": ["fixture completed"],
-                        "generated_at": "2026-04-25T20:00:00+00:00",
-                    }
-                )
-            )
+            return Completed(stdout=json.dumps(remote_output_fixture(project["id"])))
         return Completed(stdout="remote script completed\n")
 
     monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
@@ -176,7 +220,14 @@ def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatc
     assert pilot["adapter"] == "ssh"
     assert pilot["status"] == "completed"
     assert pilot["stage"] == "lyrics.generate"
-    assert pilot["output_files"] == ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"]
+    assert pilot["schema_version"] == "output.v1"
+    assert pilot["preview"]["lyrics"] == "Colors in the rhythm\n"
+    assert [artifact["artifact_id"] for artifact in pilot["artifacts"]] == ["lyrics_txt", "song_plan_json", "safety_notes_json"]
+    assert pilot["output_files"] == [
+        f"projects/{project['id']}/jobs/remote_job_from_fixture/lyrics.txt",
+        f"projects/{project['id']}/jobs/remote_job_from_fixture/song_plan.json",
+        f"projects/{project['id']}/jobs/remote_job_from_fixture/safety_notes.json",
+    ]
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
     assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
 
@@ -217,23 +268,7 @@ def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, 
 
     def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
         if command[-1].startswith("cat "):
-            return Completed(
-                stdout=json.dumps(
-                    {
-                        "schema_version": "job-contract-v1",
-                        "job_id": "remote_job_from_fixture",
-                        "project_id": project["id"],
-                        "stage": "lyrics.generate",
-                        "status": "completed",
-                        "adapter": "ssh",
-                        "storage_policy": "server",
-                        "remote_job_dir": "/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture",
-                        "output_files": ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"],
-                        "logs": ["fixture completed"],
-                        "generated_at": "2026-04-25T20:00:00+00:00",
-                    }
-                )
-            )
+            return Completed(stdout=json.dumps(remote_output_fixture(project["id"])))
         return Completed(stdout="remote script completed\n")
 
     monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
@@ -251,6 +286,67 @@ def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, 
     assert lyrics_stage["status"] == "needs_review"
     assert not (tmp_path / "projects" / project["id"] / "lyrics.json").exists()
     assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+    assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
+
+
+def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n", stdout_bytes: bytes | None = None) -> None:
+            self.returncode = 0
+            self.stdout = stdout if stdout_bytes is None else stdout_bytes
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if command[-1].startswith("cat ") and command[-1].endswith("output_manifest.json"):
+            return Completed(stdout=json.dumps(remote_output_fixture(project["id"])))
+        if command[-1].startswith("cat ") and command[-1].endswith("worker.log"):
+            return Completed(stdout="job=remote_job_from_fixture\nstorage=server\n")
+        if command[-1].startswith("cat ") and command[-1].endswith("lyrics.txt"):
+            return Completed(stdout_bytes=b"Colors in the rhythm\n")
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
+    artifacts = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/artifacts")
+    log_response = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/log")
+    artifact_response = client.get(f"/api/projects/{project['id']}/jobs/{job['id']}/artifacts/lyrics_txt")
+
+    assert artifacts.status_code == 200
+    assert [artifact["artifact_id"] for artifact in artifacts.json()] == ["lyrics_txt", "song_plan_json", "safety_notes_json"]
+    assert artifacts.json()[0]["storage_key"].startswith(f"projects/{project['id']}/jobs/")
+    assert log_response.status_code == 200
+    assert "storage=server" in log_response.json()["log"]
+    assert artifact_response.status_code == 200
+    assert artifact_response.text == "Colors in the rhythm\n"
+    assert artifact_response.headers["x-artifact-sha256"] == "sha-lyrics"
 
 
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:

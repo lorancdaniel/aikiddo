@@ -230,13 +230,24 @@ class ProjectStorage:
         return PublishPackageArtifact.model_validate_json(package_file.read_text(encoding="utf-8"))
 
     def save_remote_pilot_run(self, project_id: str, run: RemotePilotRun) -> RemotePilotRun:
+        remote_runs_dir = self.project_dir(project_id) / "remote-runs"
+        remote_runs_dir.mkdir(parents=True, exist_ok=True)
+        (remote_runs_dir / f"{run.id}.json").write_text(
+            json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         (self.project_dir(project_id) / "remote-pilot.json").write_text(
             json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return run
 
-    def get_remote_pilot_run(self, project_id: str) -> RemotePilotRun | None:
+    def get_remote_pilot_run(self, project_id: str, run_id: str | None = None) -> RemotePilotRun | None:
+        if run_id is not None:
+            run_file = self.project_dir(project_id) / "remote-runs" / f"{run_id}.json"
+            if not run_file.exists():
+                return None
+            return RemotePilotRun.model_validate_json(run_file.read_text(encoding="utf-8"))
         run_file = self.project_dir(project_id) / "remote-pilot.json"
         if not run_file.exists():
             return None

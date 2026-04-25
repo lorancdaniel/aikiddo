@@ -17,6 +17,9 @@ import {
   fetchArtifactInventory,
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
+  fetchJobArtifactText,
+  fetchJobArtifacts,
+  fetchJobLog,
   fetchKeyframesArtifact,
   fetchProjectApprovals,
   fetchProjectJobs,
@@ -32,7 +35,9 @@ import {
   fetchStoryboardArtifact,
   fetchVideoScenesArtifact,
   FullEpisodeArtifact,
+  GenerationArtifact,
   Job,
+  JobLog,
   KeyframesArtifact,
   linkProjectSeries,
   LyricsArtifact,
@@ -201,6 +206,9 @@ export default function Home() {
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [antiRepetitionReport, setAntiRepetitionReport] = useState<AntiRepetitionReport | null>(null);
   const [remotePilotRun, setRemotePilotRun] = useState<RemotePilotRun | null>(null);
+  const [serverArtifacts, setServerArtifacts] = useState<GenerationArtifact[]>([]);
+  const [serverLog, setServerLog] = useState<JobLog | null>(null);
+  const [artifactPreview, setArtifactPreview] = useState<{ artifactId: string; content: string } | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
@@ -388,9 +396,23 @@ export default function Home() {
       setAntiRepetitionReport(null);
     }
     try {
-      setRemotePilotRun(await fetchRemotePilot(projectId));
+      const remoteRun = await fetchRemotePilot(projectId);
+      setRemotePilotRun(remoteRun);
+      try {
+        setServerArtifacts(await fetchJobArtifacts(projectId, remoteRun.id));
+      } catch {
+        setServerArtifacts(remoteRun.artifacts);
+      }
+      try {
+        setServerLog(await fetchJobLog(projectId, remoteRun.id));
+      } catch {
+        setServerLog({ job_id: remoteRun.id, log: remoteRun.logs.join("\n"), lines: remoteRun.logs });
+      }
     } catch {
       setRemotePilotRun(null);
+      setServerArtifacts([]);
+      setServerLog(null);
+      setArtifactPreview(null);
     }
     try {
       setArtifactInventory(await fetchArtifactInventory(projectId));
@@ -442,6 +464,9 @@ export default function Home() {
       setPublishPackageArtifact(null);
       setAntiRepetitionReport(null);
       setRemotePilotRun(null);
+      setServerArtifacts([]);
+      setServerLog(null);
+      setArtifactPreview(null);
       setArtifactInventory([]);
       setProjectJobs([]);
       setStageApprovals([]);
@@ -494,6 +519,17 @@ export default function Home() {
     setIsRunningRemotePilot(true);
     await handleRunStage("lyrics.generate");
     setIsRunningRemotePilot(false);
+  }
+
+  async function handlePreviewArtifact(artifact: GenerationArtifact) {
+    if (!selectedProject || !remotePilotRun) return;
+    setError("");
+    try {
+      const content = await fetchJobArtifactText(selectedProject.id, remotePilotRun.id, artifact.artifact_id);
+      setArtifactPreview({ artifactId: artifact.artifact_id, content });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się pobrać artefaktu z serwera.");
+    }
   }
 
   async function refreshSelectedProject(projectId: string) {
@@ -796,7 +832,45 @@ export default function Home() {
                   <p className="font-black text-white">Job</p>
                   <p className="mt-1 break-all text-xs text-white/48">{remotePilotRun.id}</p>
                 </div>
-                {remotePilotRun.output_files.length ? (
+                {remotePilotRun.preview ? (
+                  <div className="rounded-xl border border-white/10 bg-white/7 p-3" data-testid="server-preview">
+                    <p className="font-black text-white">{remotePilotRun.preview.title}</p>
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-white/62">
+                      {remotePilotRun.preview.lyrics}
+                    </pre>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {remotePilotRun.preview.safety_notes.map((note) => (
+                        <span key={note} className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white/62">
+                          {note}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {serverArtifacts.length ? (
+                  <div className="grid gap-2">
+                    {serverArtifacts.map((artifact) => (
+                      <div key={artifact.artifact_id} className="rounded-xl bg-[var(--mist)] p-3 text-[var(--ink)]">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-black uppercase">{artifact.type}</p>
+                            <p className="mt-1 break-all text-sm font-black">{fileNameFromPath(artifact.filename)}</p>
+                          </div>
+                          <button
+                            className="rounded-full bg-[var(--ink)] px-3 py-1 text-xs font-black text-white transition hover:scale-[1.03]"
+                            type="button"
+                            onClick={() => handlePreviewArtifact(artifact)}
+                          >
+                            Preview
+                          </button>
+                        </div>
+                        <p className="mt-2 break-all text-xs font-semibold text-[var(--ink)]/58">
+                          {artifact.mime_type} · {artifact.size_bytes} bytes · {artifact.sha256.slice(0, 12)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : remotePilotRun.output_files.length ? (
                   <div className="grid gap-2">
                     {remotePilotRun.output_files.map((file) => (
                       <p key={file} className="break-all rounded-xl bg-[var(--mist)] px-3 py-2 text-xs font-bold text-[var(--ink)]">
@@ -805,11 +879,19 @@ export default function Home() {
                     ))}
                   </div>
                 ) : null}
-                {remotePilotRun.logs.length ? (
+                {artifactPreview ? (
+                  <div className="rounded-xl border border-[var(--acid)]/30 bg-[var(--acid)]/10 p-3">
+                    <p className="font-black text-[var(--acid)]">Preview {artifactPreview.artifactId}</p>
+                    <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-white/72">
+                      {artifactPreview.content}
+                    </pre>
+                  </div>
+                ) : null}
+                {(serverLog?.lines.length ?? remotePilotRun.logs.length) ? (
                   <div className="rounded-xl border border-white/10 bg-black/22 p-3">
                     <p className="font-black text-white">Log</p>
                     <div className="mt-2 space-y-1 text-xs text-white/52">
-                      {remotePilotRun.logs.map((line) => (
+                      {(serverLog?.lines ?? remotePilotRun.logs).map((line) => (
                         <p key={line}>{line}</p>
                       ))}
                     </div>
