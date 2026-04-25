@@ -23,6 +23,7 @@ import {
   fetchProjectNextAction,
   fetchPublishPackageArtifact,
   fetchAntiRepetitionReport,
+  fetchRemotePilot,
   fetchProjects,
   fetchSeries,
   fetchLyricsArtifact,
@@ -40,6 +41,7 @@ import {
   ProjectNextAction,
   PublishPackageArtifact,
   ReelsArtifact,
+  RemotePilotRun,
   runAntiRepetition,
   runStage,
   saveEpisodeSpec,
@@ -108,6 +110,10 @@ function statusClass(status: string) {
   if (status === "failed") return "bg-[var(--coral)] text-white";
   if (status === "running" || status === "queued") return "bg-[var(--violet)] text-white";
   return "bg-white/10 text-white/70";
+}
+
+function fileNameFromPath(path: string) {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function getStageStatus(project: Project | null, stage: string) {
@@ -194,6 +200,7 @@ export default function Home() {
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [antiRepetitionReport, setAntiRepetitionReport] = useState<AntiRepetitionReport | null>(null);
+  const [remotePilotRun, setRemotePilotRun] = useState<RemotePilotRun | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
@@ -207,14 +214,14 @@ export default function Home() {
     characters: "toothbrush_friend_v1"
   });
   const [serverForm, setServerForm] = useState<ServerProfileInput>({
-    mode: "mock",
-    label: "GPU tower draft",
-    host: "gpu-studio.tailnet.local",
-    username: "studio",
+    mode: "ssh",
+    label: "Production GPU worker",
+    host: "gpu-worker.tailnet",
+    username: "daniel",
     port: 22,
-    remote_root: "/srv/ai-kids-studio",
-    ssh_key_path: "~/.ssh/ai_kids_studio",
-    tailscale_name: "gpu-studio"
+    remote_root: "/home/daniel/aikiddo-worker",
+    ssh_key_path: "~/.ssh/id_ed25519",
+    tailscale_name: "gpu-worker"
   });
   const [seriesForm, setSeriesForm] = useState(createSeriesDefaults(null));
   const [episodeSpecForm, setEpisodeSpecForm] = useState(createEpisodeSpecDefaults(null));
@@ -224,6 +231,7 @@ export default function Home() {
   const [isSavingEpisodeSpec, setIsSavingEpisodeSpec] = useState(false);
   const [isApprovingEpisodeSpec, setIsApprovingEpisodeSpec] = useState(false);
   const [isRunningAntiRepetition, setIsRunningAntiRepetition] = useState(false);
+  const [isRunningRemotePilot, setIsRunningRemotePilot] = useState(false);
   const [runningStage, setRunningStage] = useState<string | null>(null);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [approvingStage, setApprovingStage] = useState<string | null>(null);
@@ -232,27 +240,29 @@ export default function Home() {
   useEffect(() => {
     async function loadStudio() {
       try {
-        const [projectList, savedSeries, server] = await Promise.all([fetchProjects(), fetchSeries(), testServerConnection()]);
+        const [projectList, savedSeries] = await Promise.all([fetchProjects(), fetchSeries()]);
         setProjects(projectList);
         setSeriesList(savedSeries);
         const firstProject = projectList[0] ?? null;
         setSelectedProject(firstProject);
         syncStrategyForms(firstProject);
         if (firstProject) await loadArtifacts(firstProject.id);
-        setConnection(server);
         try {
           const profile = await fetchServerProfile();
-          setServerProfile(profile);
-          setServerForm({
-            mode: profile.mode,
-            label: profile.label,
-            host: profile.host,
-            username: profile.username,
-            port: profile.port,
-            remote_root: profile.remote_root,
-            ssh_key_path: profile.ssh_key_path,
-            tailscale_name: profile.tailscale_name
-          });
+          if (profile.mode === "ssh") {
+            setServerProfile(profile);
+            setServerForm({
+              mode: "ssh",
+              label: profile.label,
+              host: profile.host,
+              username: profile.username,
+              port: profile.port,
+              remote_root: profile.remote_root,
+              ssh_key_path: profile.ssh_key_path,
+              tailscale_name: profile.tailscale_name
+            });
+            setConnection(await testServerConnection());
+          }
         } catch {
           setServerProfile(null);
         }
@@ -378,6 +388,11 @@ export default function Home() {
       setAntiRepetitionReport(null);
     }
     try {
+      setRemotePilotRun(await fetchRemotePilot(projectId));
+    } catch {
+      setRemotePilotRun(null);
+    }
+    try {
       setArtifactInventory(await fetchArtifactInventory(projectId));
     } catch {
       setArtifactInventory([]);
@@ -426,6 +441,7 @@ export default function Home() {
       setComplianceReportArtifact(null);
       setPublishPackageArtifact(null);
       setAntiRepetitionReport(null);
+      setRemotePilotRun(null);
       setArtifactInventory([]);
       setProjectJobs([]);
       setStageApprovals([]);
@@ -463,7 +479,7 @@ export default function Home() {
     setError("");
 
     try {
-      const saved = await saveServerProfile(serverForm);
+      const saved = await saveServerProfile({ ...serverForm, mode: "ssh" });
       setServerProfile(saved);
       const server = await testServerConnection();
       setConnection(server);
@@ -472,6 +488,12 @@ export default function Home() {
     } finally {
       setIsSavingServer(false);
     }
+  }
+
+  async function handleRunRemotePilot() {
+    setIsRunningRemotePilot(true);
+    await handleRunStage("lyrics.generate");
+    setIsRunningRemotePilot(false);
   }
 
   async function refreshSelectedProject(projectId: string) {
@@ -617,7 +639,7 @@ export default function Home() {
     }
   }
 
-  const revealWords = "Pipeline zachowuje kontrakty przyszłego serwera GPU już teraz: kolejka, manifest, status, artefakty i bramka akceptacji człowieka."
+  const revealWords = "Pipeline zachowuje kontrakty serwera GPU: kolejka, manifest, status, artefakty i bramka akceptacji człowieka."
     .split(" ");
 
   return (
@@ -629,13 +651,14 @@ export default function Home() {
           </div>
           <div>
             <p className="text-sm font-semibold">AI Kids Music Studio</p>
-            <p className="text-xs text-white/48">lokalny tryb mock</p>
+            <p className="text-xs text-white/48">generowanie na serwerze</p>
           </div>
         </div>
         <button
           className="group flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm text-white transition hover:bg-white hover:text-[var(--ink)]"
           type="button"
           onClick={() => testServerConnection().then(setConnection)}
+          disabled={serverProfile?.mode !== "ssh"}
         >
           <Server size={16} />
           Sprawdź serwer
@@ -648,7 +671,7 @@ export default function Home() {
             Studio piosenek i klipów AI
           </h1>
           <p className="hero-line mt-7 max-w-2xl text-lg leading-8 text-white/70">
-            Pierwszy lokalny kokpit produkcyjny: brief, pipeline, status mock serwera i bramki akceptacji bez czekania na fizyczny GPU.
+            Kokpit produkcyjny: brief, pipeline, manifesty serwerowe, status generacji i bramki akceptacji człowieka przed kosztownym renderem.
           </p>
           <div className="hero-line mt-9 flex flex-wrap gap-3">
             <a
@@ -662,10 +685,10 @@ export default function Home() {
               className="inline-flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-3 text-sm font-bold text-[var(--ink)] transition hover:scale-[1.02]"
               type="button"
               onClick={() => handleRunStage("lyrics.generate")}
-              disabled={!selectedProject || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
+              disabled={!selectedProject || serverProfile?.mode !== "ssh" || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
             >
               {runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-              Uruchom tekst
+              Uruchom na serwerze
             </button>
           </div>
         </div>
@@ -690,7 +713,7 @@ export default function Home() {
           <div className="mb-6 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-2xl font-black">Nowy projekt</h2>
-              <p className="mt-1 text-sm text-white/52">Brief zapisze się lokalnie w katalogu projektu.</p>
+              <p className="mt-1 text-sm text-white/52">Brief zapisze się w serwerowym katalogu projektu.</p>
             </div>
             <Wand2 className="text-[var(--acid)]" size={24} />
           </div>
@@ -741,8 +764,59 @@ export default function Home() {
             <Activity className="text-[var(--teal)]" size={24} />
           </div>
           <div className="mt-6 rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
-            <p className="text-sm font-bold">{connection?.message ?? "Łączenie z mock serwerem..."}</p>
+            <p className="text-sm font-bold">{connection?.message ?? "Sprawdzam profil serwera..."}</p>
             <p className="mt-5 text-5xl font-black">{connection?.reachable ? "ready" : "wait"}</p>
+          </div>
+          <div className="mt-5 rounded-2xl border border-white/10 bg-black/22 p-4" data-testid="remote-pilot">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-black">Generacja serwerowa</p>
+                <p className="mt-1 text-sm leading-6 text-white/52">
+                  {serverProfile?.mode === "ssh"
+                    ? "Backend tworzy job, pilnuje manifestu i zapisuje artefakty po stronie serwera."
+                    : "Zapisz profil serwera, żeby uruchamiać generacje."}
+                </p>
+              </div>
+              <span className={`status-pill ${remotePilotRun?.status === "failed" ? "bg-[var(--coral)] text-white" : "bg-white/10 text-white/70"}`}>
+                {remotePilotRun?.status ?? "idle"}
+              </span>
+            </div>
+            <button
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              onClick={handleRunRemotePilot}
+              disabled={!selectedProject || serverProfile?.mode !== "ssh" || isRunningRemotePilot || runningStage !== null || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
+            >
+              {isRunningRemotePilot || runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              Generuj na serwerze
+            </button>
+            {remotePilotRun ? (
+              <div className="mt-4 grid gap-3 text-sm text-white/68">
+                <div className="rounded-xl bg-white/7 p-3">
+                  <p className="font-black text-white">Job</p>
+                  <p className="mt-1 break-all text-xs text-white/48">{remotePilotRun.id}</p>
+                </div>
+                {remotePilotRun.output_files.length ? (
+                  <div className="grid gap-2">
+                    {remotePilotRun.output_files.map((file) => (
+                      <p key={file} className="break-all rounded-xl bg-[var(--mist)] px-3 py-2 text-xs font-bold text-[var(--ink)]">
+                        {fileNameFromPath(file)}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+                {remotePilotRun.logs.length ? (
+                  <div className="rounded-xl border border-white/10 bg-black/22 p-3">
+                    <p className="font-black text-white">Log</p>
+                    <div className="mt-2 space-y-1 text-xs text-white/52">
+                      {remotePilotRun.logs.map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <form className="mt-5 grid gap-3" onSubmit={handleSaveServerProfile}>
             <label className="grid gap-2 text-sm text-white/70">
@@ -789,7 +863,7 @@ export default function Home() {
               disabled={isSavingServer}
             >
               {isSavingServer ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={18} />}
-              Zapisz profil
+              Zapisz profil serwera
             </button>
           </form>
           <div className="mt-5 flex items-center gap-2 text-sm text-white/58">
@@ -1006,10 +1080,10 @@ export default function Home() {
               type="button"
               data-testid="run-lyrics-button"
               onClick={() => handleRunStage("lyrics.generate")}
-              disabled={!selectedProject || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
+              disabled={!selectedProject || serverProfile?.mode !== "ssh" || runningStage !== null || !canRunLyrics || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
             >
               {runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-              Uruchom tekst
+              Uruchom na serwerze
             </button>
           </div>
           {jobMessage ? (
@@ -1071,10 +1145,10 @@ export default function Home() {
                     type="button"
                     data-testid={`run-${stage.stage}`}
                     onClick={() => handleRunStage(stage.stage)}
-                    disabled={runningStage !== null}
+                    disabled={serverProfile?.mode !== "ssh" || runningStage !== null}
                   >
                     {runningStage === stage.stage ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-                    Uruchom
+                    Serwer
                   </button>
                 ) : null}
               </div>
@@ -1527,11 +1601,11 @@ export default function Home() {
       </section>
 
       <footer className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-5 py-16 text-sm text-white/55 md:flex-row md:items-center md:justify-between md:px-8">
-        <p>Mock adapter dzisiaj. SSH, Tailscale i GPU worker w następnym pionowym wycinku.</p>
+        <p>Generacje przechodzą przez SSH worker, manifesty i artefakty zapisywane po stronie serwera.</p>
         <div className="flex gap-3">
           <span className="rounded-full border border-white/12 px-3 py-2">FastAPI</span>
           <span className="rounded-full border border-white/12 px-3 py-2">Next.js</span>
-          <span className="rounded-full border border-white/12 px-3 py-2">Local projects</span>
+          <span className="rounded-full border border-white/12 px-3 py-2">SSH worker</span>
         </div>
       </footer>
     </main>

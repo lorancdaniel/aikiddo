@@ -454,14 +454,14 @@ class Job(BaseModel):
     project_id: str
     stage: str
     status: StageStatus
-    adapter: Literal["mock"]
+    adapter: Literal["mock", "ssh"]
     message: str
     created_at: str
     updated_at: str
 
 
 class ServerConnection(BaseModel):
-    mode: Literal["mock"]
+    mode: Literal["mock", "ssh"]
     reachable: bool
     message: str
 
@@ -478,6 +478,26 @@ class ServerProfileInput(BaseModel):
 
 
 class ServerProfile(ServerProfileInput):
+    updated_at: str
+
+
+class RemotePilotInput(BaseModel):
+    stage: str = Field(default="lyrics.generate", min_length=1, max_length=120)
+
+
+class RemotePilotRun(BaseModel):
+    id: str
+    project_id: str
+    stage: str
+    status: Literal["completed", "failed"]
+    adapter: Literal["ssh"]
+    remote_job_dir: str
+    job_manifest_path: str
+    output_manifest_path: str
+    output_files: list[str]
+    message: str
+    logs: list[str]
+    created_at: str
     updated_at: str
 
 

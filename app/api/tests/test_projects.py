@@ -92,6 +92,167 @@ def test_health_reports_mock_adapter(tmp_path: Path) -> None:
     assert response.json() == {"status": "ok", "adapter": "mock"}
 
 
+def test_remote_pilot_requires_ssh_profile(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Remote pilot",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+
+    response = client.post(f"/api/projects/{project['id']}/remote-pilot", json={"stage": "lyrics.generate"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "SSH server profile is required for remote generation"
+
+
+def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Remote pilot",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+
+    calls: list[dict] = []
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        calls.append({"command": command, "input": input})
+        if command[-1].startswith("cat "):
+            return Completed(
+                stdout=json.dumps(
+                    {
+                        "job_id": "remote_job_from_fixture",
+                        "project_id": project["id"],
+                        "stage": "lyrics.generate",
+                        "status": "completed",
+                        "adapter": "ssh",
+                        "remote_job_dir": "/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture",
+                        "output_files": ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"],
+                        "logs": ["fixture completed"],
+                        "generated_at": "2026-04-25T20:00:00+00:00",
+                    }
+                )
+            )
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    response = client.post(f"/api/projects/{project['id']}/remote-pilot", json={"stage": "lyrics.generate"})
+
+    assert response.status_code == 202
+    pilot = response.json()
+    assert pilot["adapter"] == "ssh"
+    assert pilot["status"] == "completed"
+    assert pilot["stage"] == "lyrics.generate"
+    assert pilot["output_files"] == ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"]
+    assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
+    assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+
+
+def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if command[-1].startswith("cat "):
+            return Completed(
+                stdout=json.dumps(
+                    {
+                        "schema_version": "job-contract-v1",
+                        "job_id": "remote_job_from_fixture",
+                        "project_id": project["id"],
+                        "stage": "lyrics.generate",
+                        "status": "completed",
+                        "adapter": "ssh",
+                        "storage_policy": "server",
+                        "remote_job_dir": "/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture",
+                        "output_files": ["/home/daniel/aikiddo-worker/jobs/remote_job_from_fixture/pilot-artifact.txt"],
+                        "logs": ["fixture completed"],
+                        "generated_at": "2026-04-25T20:00:00+00:00",
+                    }
+                )
+            )
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    response = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate")
+
+    assert response.status_code == 202
+    job = response.json()
+    assert job["adapter"] == "ssh"
+    assert job["status"] == "needs_review"
+    project_after_job = client.get(f"/api/projects/{project['id']}").json()
+    lyrics_stage = next(stage for stage in project_after_job["pipeline"] if stage["stage"] == "lyrics.generate")
+    assert lyrics_stage["job_id"] == job["id"]
+    assert job["id"].startswith("remote_")
+    assert lyrics_stage["status"] == "needs_review"
+    assert not (tmp_path / "projects" / project["id"] / "lyrics.json").exists()
+    assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+
+
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

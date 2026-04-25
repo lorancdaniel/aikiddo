@@ -1,20 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-test("operator can create a project and run a mock stage", async ({ page }) => {
+test("operator sees a server-first generation cockpit", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Studio piosenek i klipów AI" })).toBeVisible();
-  await expect(page.getByText("Mock GPU server is ready for local development.")).toBeVisible();
-
-  await page.getByLabel("Nazwa profilu").fill("GPU tower draft");
-  await page.getByLabel("Host").fill("gpu-studio.tailnet.local");
-  await page.getByLabel("Użytkownik SSH").fill("studio");
-  await page.getByLabel("Port").fill("22");
-  await page.getByLabel("Remote root").fill("/srv/ai-kids-studio");
-  await page.getByLabel("Ścieżka klucza").fill("~/.ssh/ai_kids_studio");
-  await page.getByLabel("Tailscale").fill("gpu-studio");
-  await page.getByRole("button", { name: "Zapisz profil" }).click();
-  await expect(page.getByText("Mock GPU server profile 'GPU tower draft' is ready for local development.")).toBeVisible();
+  await expect(page.getByText("generowanie na serwerze")).toBeVisible();
+  await expect(page.getByTestId("remote-pilot")).toContainText("Generacja serwerowa");
+  await expect(page.getByTestId("remote-pilot")).toContainText("Zapisz profil serwera");
+  await expect(page.getByText("Mock", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("mock", { exact: false })).toHaveCount(0);
 
   await page.getByLabel("Tytuł projektu").fill("Szczoteczka bohater");
   await page.getByLabel("Temat").fill("mycie zębów");
@@ -25,104 +19,10 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await page.getByRole("button", { name: "Utwórz projekt" }).click();
 
   await expect(page.getByTestId("selected-project-title")).toContainText("Szczoteczka bohater");
-  await expect(page.getByTestId("content-strategy")).toContainText("Content Strategy");
-  await expect(page.getByTestId("next-action")).toContainText("Wybierz albo utwórz Series Bible");
-  await page.getByLabel("Nazwa serii").fill("Healthy Habits Songs");
-  await page.getByLabel("Domena nauki").fill("health routines");
-  await page.getByLabel("Założenie serii").fill("Short songs for preschool daily routines.");
-  await page.getByLabel("Styl wizualny serii").fill("bright 2D bathroom and classroom scenes");
-  await page.getByLabel("Styl muzyczny serii").fill("upbeat call-and-response");
-  await page.getByLabel("Reguły głosu").fill("clear pronunciation, gentle pace");
-  await page.getByLabel("Zasady bezpieczeństwa").fill("no unsafe actions, no fear pressure");
-  await page.getByLabel("Zakazane treści").fill("violence, brand mascots");
-  await page.getByRole("button", { name: "Zapisz serię" }).click();
-  await expect(page.getByTestId("next-action")).toContainText("Uzupełnij Episode Spec");
-  await page.getByLabel("Roboczy tytuł").fill("Toothbrush Morning Song");
-  await page.getByLabel("Learning objective").fill("Dziecko 3-5 lat pamięta dwa kroki porannego mycia zębów.");
-  await page.getByLabel("Słownictwo").fill("brush, teeth, morning");
-  await page.getByLabel("Słowa kluczowe").fill("toothbrush song, brushing teeth kids");
-  await page.getByRole("button", { name: "Zapisz Episode Spec" }).click();
-  await expect(page.getByTestId("next-action")).toContainText("Episode Spec czeka na akceptację operatora.");
-  await page.getByRole("button", { name: "Zatwierdź Episode Spec" }).click();
-  await expect(page.getByTestId("next-action")).toContainText("Uruchom Anti-Repetition check");
-  await page.getByRole("button", { name: "Uruchom Anti-Repetition" }).click();
-  await expect(page.getByTestId("repetition-risk")).toContainText("ok");
-  await expect(page.getByTestId("next-action")).toContainText("Brief czeka na akceptację operatora.");
+  await expect(page.getByTestId("remote-pilot").getByRole("button", { name: "Generuj na serwerze" })).toBeDisabled();
   await expect(page.getByTestId("run-lyrics-button")).toBeDisabled();
-  await page.getByTestId("approve-brief.generate").click();
-  await expect(page.getByTestId("stage-brief.generate")).toContainText("gotowe");
-  await expect(page.getByText("Brief zatwierdzony.")).toBeVisible();
-  await expect(page.getByTestId("next-action")).toContainText("Możesz uruchomić etap Tekst.");
-  await expect(page.getByTestId("run-lyrics-button")).toBeEnabled();
 
-  await page.getByTestId("run-lyrics-button").click();
-  await expect(page.getByText("Mock job for lyrics.generate finished locally.")).toBeVisible();
-  await expect(page.getByTestId("next-action")).toContainText("Tekst czeka na akceptację operatora.");
-  await expect(page.getByTestId("lyrics-artifact")).toContainText("Refren");
-  await expect(page.getByTestId("lyrics-artifact")).toContainText("Mycie zębów");
-  await expect(page.getByTestId("stage-lyrics.generate")).toContainText("do akceptacji");
-  await page.getByTestId("approve-lyrics.generate").click();
-  await expect(page.getByTestId("stage-lyrics.generate")).toContainText("gotowe");
-  await expect(page.getByText("Tekst zatwierdzony.")).toBeVisible();
-
-  await page.getByTestId("run-characters.import_or_approve").click();
-  await expect(page.getByTestId("stage-characters.import_or_approve")).toContainText("do akceptacji");
-  await page.getByTestId("approve-characters.import_or_approve").click();
-  await expect(page.getByTestId("stage-characters.import_or_approve")).toContainText("gotowe");
-
-  await page.getByTestId("run-audio.generate_or_import").click();
-  await expect(page.getByTestId("stage-audio.generate_or_import")).toContainText("gotowe");
-
-  await page.getByTestId("run-storyboard.generate").click();
-  await expect(page.getByTestId("stage-storyboard.generate")).toContainText("do akceptacji");
-  await expect(page.getByTestId("storyboard-artifact")).toContainText("Storyboard");
-  await expect(page.getByTestId("storyboard-artifact")).toContainText("Scena 1");
-  await page.getByTestId("approve-storyboard.generate").click();
-  await expect(page.getByTestId("stage-storyboard.generate")).toContainText("gotowe");
-
-  await page.getByTestId("run-keyframes.generate").click();
-  await expect(page.getByTestId("stage-keyframes.generate")).toContainText("do akceptacji");
-  await expect(page.getByTestId("keyframes-artifact")).toContainText("Keyframes");
-  await expect(page.getByTestId("keyframes-artifact")).toContainText("Klatka 1");
-  await page.getByTestId("approve-keyframes.generate").click();
-  await expect(page.getByTestId("stage-keyframes.generate")).toContainText("gotowe");
-
-  await page.getByTestId("run-video.scenes.generate").click();
-  await expect(page.getByTestId("stage-video.scenes.generate")).toContainText("do akceptacji");
-  await expect(page.getByTestId("video-scenes-artifact")).toContainText("Sceny wideo");
-  await expect(page.getByTestId("video-scenes-artifact")).toContainText("Klip 1");
-  await page.getByTestId("approve-video.scenes.generate").click();
-  await expect(page.getByTestId("stage-video.scenes.generate")).toContainText("gotowe");
-
-  await page.getByTestId("run-render.full_episode").click();
-  await expect(page.getByTestId("stage-render.full_episode")).toContainText("gotowe");
-  await expect(page.getByTestId("full-episode-artifact")).toContainText("Odcinek");
-  await expect(page.getByTestId("full-episode-artifact")).toContainText("full-episode.mp4");
-
-  await page.getByTestId("run-render.reels").click();
-  await expect(page.getByTestId("stage-render.reels")).toContainText("gotowe");
-  await expect(page.getByTestId("reels-artifact")).toContainText("Rolki");
-  await expect(page.getByTestId("reels-artifact")).toContainText("reel-01.mp4");
-
-  await page.getByTestId("run-quality.compliance_report").click();
-  await expect(page.getByTestId("stage-quality.compliance_report")).toContainText("do akceptacji");
-  await expect(page.getByTestId("compliance-report-artifact")).toContainText("Kontrola jakości");
-  await expect(page.getByTestId("compliance-report-artifact")).toContainText("Gotowy");
-  await page.getByTestId("approve-quality.compliance_report").click();
-  await expect(page.getByTestId("stage-quality.compliance_report")).toContainText("gotowe");
-
-  await page.getByTestId("run-publish.prepare_package").click();
-  await expect(page.getByTestId("stage-publish.prepare_package")).toContainText("gotowe");
-  await expect(page.getByTestId("publish-package-artifact")).toContainText("Paczka publikacji");
-  await expect(page.getByTestId("publish-package-artifact")).toContainText("publish/");
-  await expect(page.getByTestId("publish-package-artifact")).toContainText("compliance-report.json");
-  await expect(page.getByTestId("artifact-inventory")).toContainText("Rejestr artefaktów");
-  await expect(page.getByTestId("artifact-inventory")).toContainText("publish-package.json");
-  await expect(page.getByTestId("artifact-inventory")).toContainText("video-scenes.json");
-  await expect(page.getByTestId("job-history")).toContainText("Historia jobów");
-  await expect(page.getByTestId("job-history")).toContainText("lyrics.generate");
-  await expect(page.getByTestId("job-history")).toContainText("publish.prepare_package");
-  await expect(page.getByTestId("approval-history")).toContainText("Akceptacje");
-  await expect(page.getByTestId("approval-history")).toContainText("brief.generate");
-  await expect(page.getByTestId("approval-history")).toContainText("quality.compliance_report");
+  await expect(page.getByLabel("Nazwa profilu")).toHaveValue("Production GPU worker");
+  await expect(page.getByLabel("Użytkownik SSH")).toHaveValue("daniel");
+  await expect(page.getByLabel("Remote root")).toHaveValue("/home/daniel/aikiddo-worker");
 });

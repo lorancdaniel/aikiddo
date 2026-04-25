@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import AntiRepetitionReport, ArtifactInventoryItem, ComplianceReportArtifact, FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, PublishPackageArtifact, ReelsArtifact, RemotePilotRun, SeriesBible, SeriesBibleInput, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
 
 
 ARTIFACT_MANIFESTS = [
@@ -15,6 +15,7 @@ ARTIFACT_MANIFESTS = [
     ("reels", "reels.json"),
     ("compliance_report", "compliance-report.json"),
     ("anti_repetition", "anti-repetition.json"),
+    ("remote_pilot", "remote-pilot.json"),
     ("publish_package", "publish-package.json"),
 ]
 
@@ -227,6 +228,19 @@ class ProjectStorage:
         if not package_file.exists():
             return None
         return PublishPackageArtifact.model_validate_json(package_file.read_text(encoding="utf-8"))
+
+    def save_remote_pilot_run(self, project_id: str, run: RemotePilotRun) -> RemotePilotRun:
+        (self.project_dir(project_id) / "remote-pilot.json").write_text(
+            json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return run
+
+    def get_remote_pilot_run(self, project_id: str) -> RemotePilotRun | None:
+        run_file = self.project_dir(project_id) / "remote-pilot.json"
+        if not run_file.exists():
+            return None
+        return RemotePilotRun.model_validate_json(run_file.read_text(encoding="utf-8"))
 
     def list_artifacts(self, project_id: str) -> list[ArtifactInventoryItem]:
         project_dir = self.project_dir(project_id)

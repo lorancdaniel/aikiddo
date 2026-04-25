@@ -35,7 +35,7 @@ export type Job = {
   project_id: string;
   stage: string;
   status: StageStatus;
-  adapter: "mock";
+  adapter: "mock" | "ssh";
   message: string;
   created_at: string;
   updated_at: string;
@@ -177,7 +177,7 @@ export type AntiRepetitionReport = {
 };
 
 export type ServerConnection = {
-  mode: "mock";
+  mode: "mock" | "ssh";
   reachable: boolean;
   message: string;
 };
@@ -195,6 +195,22 @@ export type ServerProfile = {
 };
 
 export type ServerProfileInput = Omit<ServerProfile, "updated_at">;
+
+export type RemotePilotRun = {
+  id: string;
+  project_id: string;
+  stage: string;
+  status: "completed" | "failed";
+  adapter: "ssh";
+  remote_job_dir: string;
+  job_manifest_path: string;
+  output_manifest_path: string;
+  output_files: string[];
+  message: string;
+  logs: string[];
+  created_at: string;
+  updated_at: string;
+};
 
 export type LyricsArtifact = {
   title: string;
@@ -453,6 +469,17 @@ export function saveServerProfile(input: ServerProfileInput) {
   return request<ServerProfile>("/api/server/profile", {
     method: "PUT",
     body: JSON.stringify(input)
+  });
+}
+
+export function fetchRemotePilot(projectId: string) {
+  return request<RemotePilotRun>(`/api/projects/${projectId}/remote-pilot`);
+}
+
+export function runRemotePilot(projectId: string, stage = "lyrics.generate") {
+  return request<RemotePilotRun>(`/api/projects/${projectId}/remote-pilot`, {
+    method: "POST",
+    body: JSON.stringify({ stage })
   });
 }
 

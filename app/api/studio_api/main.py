@@ -14,6 +14,7 @@ from .models import (
     EpisodeSpec,
     EpisodeSpecInput,
     FullEpisodeArtifact,
+    HUMAN_REVIEW_STAGES,
     Job,
     KeyframesArtifact,
     LyricsArtifact,
@@ -23,6 +24,8 @@ from .models import (
     ProjectSeriesLinkInput,
     PublishPackageArtifact,
     ReelsArtifact,
+    RemotePilotInput,
+    RemotePilotRun,
     ServerProfile,
     ServerProfileInput,
     STAGE_DISPLAY_CATALOG,
@@ -38,6 +41,7 @@ from .models import (
     create_project_from_brief,
     utc_now,
 )
+from .ssh_generation import SshGenerationServer
 from .storage import ProjectStorage
 
 
@@ -123,6 +127,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
     default_root = Path(configured_root) if configured_root else Path(__file__).resolve().parents[3] / "projects"
     storage = ProjectStorage(projects_root or default_root)
     mock_server = MockGpuServer()
+    ssh_server = SshGenerationServer()
 
     app = FastAPI(title="AI Kids Music Studio API", version="0.1.0")
     app.add_middleware(
@@ -321,7 +326,10 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
     @app.post("/api/server/test-connection")
     def test_server_connection():
-        return mock_server.test_connection(storage.get_server_profile())
+        profile = storage.get_server_profile()
+        if profile is not None and profile.mode == "ssh":
+            return ssh_server.test_connection(profile)
+        return mock_server.test_connection(profile)
 
     @app.get("/api/server/profile", response_model=ServerProfile)
     def get_server_profile() -> ServerProfile:
@@ -333,6 +341,27 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
     @app.put("/api/server/profile", response_model=ServerProfile)
     def save_server_profile(profile_input: ServerProfileInput) -> ServerProfile:
         return storage.save_server_profile(profile_input)
+
+    @app.get("/api/projects/{project_id}/remote-pilot", response_model=RemotePilotRun)
+    def get_remote_pilot(project_id: str) -> RemotePilotRun:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        run = storage.get_remote_pilot_run(project_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Remote pilot not found")
+        return run
+
+    @app.post("/api/projects/{project_id}/remote-pilot", response_model=RemotePilotRun, status_code=status.HTTP_202_ACCEPTED)
+    def run_remote_pilot(project_id: str, pilot_input: RemotePilotInput) -> RemotePilotRun:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        profile = storage.get_server_profile()
+        if profile is None or profile.mode != "ssh":
+            raise HTTPException(status_code=409, detail="SSH server profile is required for remote generation")
+        run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=pilot_input.stage, profile=profile)
+        return storage.save_remote_pilot_run(project_id, run)
 
     @app.post("/api/projects/{project_id}/jobs/{stage}", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
     def submit_job(project_id: str, stage: str) -> Job:
@@ -352,35 +381,52 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                     detail=f"Previous stage {previous_stage_name} must be completed first",
                 )
 
-        job = mock_server.submit_job(project_id=project_id, stage=stage)
-        storage.save_job(job)
-        if stage == "lyrics.generate":
-            storage.save_lyrics(project_id, mock_server.generate_lyrics(project.brief))
-        if stage == "storyboard.generate":
-            storage.save_storyboard(project_id, mock_server.generate_storyboard(project.brief, storage.get_lyrics(project_id)))
-        if stage == "keyframes.generate":
-            storage.save_keyframes(project_id, mock_server.generate_keyframes(project.brief, storage.get_storyboard(project_id)))
-        if stage == "video.scenes.generate":
-            storage.save_video_scenes(project_id, mock_server.generate_video_scenes(project.brief, storage.get_keyframes(project_id)))
-        if stage == "render.full_episode":
-            storage.save_full_episode(project_id, mock_server.generate_full_episode(project.brief, storage.get_video_scenes(project_id)))
-        if stage == "render.reels":
-            storage.save_reels(project_id, mock_server.generate_reels(project.brief, storage.get_full_episode(project_id)))
-        if stage == "quality.compliance_report":
-            storage.save_compliance_report(
-                project_id,
-                mock_server.generate_compliance_report(project.brief, storage.get_full_episode(project_id), storage.get_reels(project_id)),
+        profile = storage.get_server_profile()
+        if profile is not None and profile.mode == "ssh":
+            remote_run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=stage, profile=profile)
+            storage.save_remote_pilot_run(project_id, remote_run)
+            job_status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
+            job = Job(
+                id=remote_run.id,
+                project_id=project_id,
+                stage=stage,
+                status=job_status,
+                adapter="ssh",
+                message=remote_run.message,
+                created_at=remote_run.created_at,
+                updated_at=remote_run.updated_at,
             )
-        if stage == "publish.prepare_package":
-            storage.save_publish_package(
-                project_id,
-                mock_server.generate_publish_package(
-                    project.brief,
-                    storage.get_full_episode(project_id),
-                    storage.get_reels(project_id),
-                    storage.get_compliance_report(project_id),
-                ),
-            )
+            storage.save_job(job)
+        else:
+            job = mock_server.submit_job(project_id=project_id, stage=stage)
+            storage.save_job(job)
+            if stage == "lyrics.generate":
+                storage.save_lyrics(project_id, mock_server.generate_lyrics(project.brief))
+            if stage == "storyboard.generate":
+                storage.save_storyboard(project_id, mock_server.generate_storyboard(project.brief, storage.get_lyrics(project_id)))
+            if stage == "keyframes.generate":
+                storage.save_keyframes(project_id, mock_server.generate_keyframes(project.brief, storage.get_storyboard(project_id)))
+            if stage == "video.scenes.generate":
+                storage.save_video_scenes(project_id, mock_server.generate_video_scenes(project.brief, storage.get_keyframes(project_id)))
+            if stage == "render.full_episode":
+                storage.save_full_episode(project_id, mock_server.generate_full_episode(project.brief, storage.get_video_scenes(project_id)))
+            if stage == "render.reels":
+                storage.save_reels(project_id, mock_server.generate_reels(project.brief, storage.get_full_episode(project_id)))
+            if stage == "quality.compliance_report":
+                storage.save_compliance_report(
+                    project_id,
+                    mock_server.generate_compliance_report(project.brief, storage.get_full_episode(project_id), storage.get_reels(project_id)),
+                )
+            if stage == "publish.prepare_package":
+                storage.save_publish_package(
+                    project_id,
+                    mock_server.generate_publish_package(
+                        project.brief,
+                        storage.get_full_episode(project_id),
+                        storage.get_reels(project_id),
+                        storage.get_compliance_report(project_id),
+                    ),
+                )
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
