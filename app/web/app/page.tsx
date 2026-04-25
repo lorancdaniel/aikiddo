@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
 import {
   approveStage,
   createProject,
@@ -13,6 +13,7 @@ import {
   fetchLyricsArtifact,
   fetchServerProfile,
   fetchStoryboardArtifact,
+  fetchVideoScenesArtifact,
   KeyframesArtifact,
   LyricsArtifact,
   Project,
@@ -23,7 +24,8 @@ import {
   ServerProfile,
   ServerProfileInput,
   StoryboardArtifact,
-  testServerConnection
+  testServerConnection,
+  VideoScenesArtifact
 } from "../lib/api";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
@@ -87,6 +89,7 @@ export default function Home() {
   const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
   const [storyboardArtifact, setStoryboardArtifact] = useState<StoryboardArtifact | null>(null);
   const [keyframesArtifact, setKeyframesArtifact] = useState<KeyframesArtifact | null>(null);
+  const [videoScenesArtifact, setVideoScenesArtifact] = useState<VideoScenesArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -209,6 +212,11 @@ export default function Home() {
     } catch {
       setKeyframesArtifact(null);
     }
+    try {
+      setVideoScenesArtifact(await fetchVideoScenesArtifact(projectId));
+    } catch {
+      setVideoScenesArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -231,6 +239,7 @@ export default function Home() {
       setLyricsArtifact(null);
       setStoryboardArtifact(null);
       setKeyframesArtifact(null);
+      setVideoScenesArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -577,7 +586,50 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {keyframesArtifact ? (
+          {videoScenesArtifact ? (
+            <div className="p-5 md:p-7" data-testid="video-scenes-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Sceny wideo</h2>
+                  <p className="mt-2 text-sm text-white/52">{videoScenesArtifact.topic} · {videoScenesArtifact.age_range}</p>
+                </div>
+                <Film className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="grid gap-4">
+                {videoScenesArtifact.scenes.map((scene, index) => (
+                  <div key={scene.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-white/7">
+                    <div
+                      className="min-h-44 bg-cover bg-center p-4 transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+                      style={{
+                        backgroundImage:
+                          `linear-gradient(180deg, rgba(12,12,13,0.05), rgba(12,12,13,0.88)), url(https://picsum.photos/seed/${scene.id}-${scene.source_keyframe_id}/900/560)`
+                      }}
+                    >
+                      <p className="text-sm font-black text-[var(--acid)]">Klip {index + 1} · {scene.duration_seconds}s</p>
+                      <p className="mt-20 max-w-sm text-xl font-black leading-tight">{scene.camera_motion}</p>
+                    </div>
+                    <div className="p-4">
+                      <div className="flex flex-wrap gap-2 text-xs text-white/55">
+                        <span className="rounded-full border border-white/10 bg-white/8 px-3 py-1">{scene.source_keyframe_id}</span>
+                        <span className="rounded-full border border-white/10 bg-white/8 px-3 py-1">{scene.transition}</span>
+                      </div>
+                      <p className="mt-4 text-sm font-black text-[var(--teal)]">Motion prompt</p>
+                      <p className="mt-2 text-sm leading-6 text-white/70">{scene.motion_prompt}</p>
+                      <p className="mt-3 text-xs text-white/45">{scene.safety_note}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Notatki renderu</p>
+                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                  {videoScenesArtifact.render_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : keyframesArtifact ? (
             <div className="p-5 md:p-7" data-testid="keyframes-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

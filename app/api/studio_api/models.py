@@ -116,6 +116,26 @@ class KeyframesArtifact(BaseModel):
     created_at: str
 
 
+class VideoSceneClip(BaseModel):
+    id: str
+    scene_id: str
+    source_keyframe_id: str
+    duration_seconds: int
+    motion_prompt: str
+    camera_motion: str
+    transition: str
+    safety_note: str
+
+
+class VideoScenesArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    scenes: list[VideoSceneClip]
+    render_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

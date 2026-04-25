@@ -109,6 +109,26 @@ export type KeyframesArtifact = {
   created_at: string;
 };
 
+export type VideoSceneClip = {
+  id: string;
+  scene_id: string;
+  source_keyframe_id: string;
+  duration_seconds: number;
+  motion_prompt: string;
+  camera_motion: string;
+  transition: string;
+  safety_note: string;
+};
+
+export type VideoScenesArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  scenes: VideoSceneClip[];
+  render_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -182,6 +202,10 @@ export function fetchStoryboardArtifact(projectId: string) {
 
 export function fetchKeyframesArtifact(projectId: string) {
   return request<KeyframesArtifact>(`/api/projects/${projectId}/artifacts/keyframes`);
+}
+
+export function fetchVideoScenesArtifact(projectId: string) {
+  return request<VideoScenesArtifact>(`/api/projects/${projectId}/artifacts/video-scenes`);
 }
 
 export function runStage(projectId: string, stage: string) {

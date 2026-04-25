@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from .models import HUMAN_REVIEW_STAGES, Brief, Job, KeyframeFrame, KeyframesArtifact, LyricsArtifact, ServerConnection, ServerProfile, StageStatus, StoryboardArtifact, StoryboardScene, utc_now
+from .models import HUMAN_REVIEW_STAGES, Brief, Job, KeyframeFrame, KeyframesArtifact, LyricsArtifact, ServerConnection, ServerProfile, StageStatus, StoryboardArtifact, StoryboardScene, VideoSceneClip, VideoScenesArtifact, utc_now
 
 
 class MockGpuServer:
@@ -147,6 +147,34 @@ class MockGpuServer:
                 "Postać ma tę samą sylwetkę, proporcje i paletę w każdej klatce.",
                 "Światło pozostaje miękkie, bez ostrych kontrastów i migotania.",
                 "Kompozycje zostawiają bezpieczny margines dla napisów i ruchu kamery.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_video_scenes(self, brief: Brief, keyframes: KeyframesArtifact | None = None) -> VideoScenesArtifact:
+        frames = keyframes.frames if keyframes else self.generate_keyframes(brief).frames
+        scenes = [
+            VideoSceneClip(
+                id=f"video_scene_{index + 1:02d}",
+                scene_id=frame.scene_id,
+                source_keyframe_id=frame.id,
+                duration_seconds=8 + (index * 2),
+                motion_prompt=f"{frame.image_prompt}, gentle motion, soft character animation, no rapid flashes, smooth preschool pacing",
+                camera_motion=frame.composition,
+                transition="soft dissolve" if index > 0 else "fade in from warm color",
+                safety_note="Motion remains calm, readable, and free from strobing.",
+            )
+            for index, frame in enumerate(frames)
+        ]
+        return VideoScenesArtifact(
+            title=brief.title,
+            topic=brief.topic,
+            age_range=brief.age_range,
+            scenes=scenes,
+            render_notes=[
+                "Każda scena zachowuje spokojne tempo i miękkie przejścia.",
+                "Ruch kamery bazuje na zatwierdzonych keyframes, bez nagłych skoków.",
+                "Klipy są gotowe do późniejszego złożenia w pełny odcinek.",
             ],
             created_at=utc_now(),
         )

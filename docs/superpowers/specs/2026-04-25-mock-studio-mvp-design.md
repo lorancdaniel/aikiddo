@@ -67,6 +67,8 @@ The mock `storyboard.generate` stage creates a reviewable `storyboard.json` arti
 
 The mock `keyframes.generate` stage creates a reviewable `keyframes.json` artifact after storyboard approval. Each frame maps back to a storyboard scene and includes timestamp, image prompt, composition, palette, and continuity notes. The cockpit promotes keyframes above storyboard once they exist so the operator always sees the next human review surface.
 
+The mock `video.scenes.generate` stage creates a reviewable `video-scenes.json` artifact after keyframes approval. Each clip maps back to a source keyframe and includes duration, motion prompt, camera motion, transition, and safety note. The cockpit promotes video scenes above keyframes so the review surface follows the active pipeline stage.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

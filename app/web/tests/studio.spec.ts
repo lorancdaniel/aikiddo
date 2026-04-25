@@ -59,4 +59,11 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await expect(page.getByTestId("stage-keyframes.generate")).toContainText("do akceptacji");
   await expect(page.getByTestId("keyframes-artifact")).toContainText("Keyframes");
   await expect(page.getByTestId("keyframes-artifact")).toContainText("Klatka 1");
+  await page.getByTestId("approve-keyframes.generate").click();
+  await expect(page.getByTestId("stage-keyframes.generate")).toContainText("gotowe");
+
+  await page.getByTestId("run-video.scenes.generate").click();
+  await expect(page.getByTestId("stage-video.scenes.generate")).toContainText("do akceptacji");
+  await expect(page.getByTestId("video-scenes-artifact")).toContainText("Sceny wideo");
+  await expect(page.getByTestId("video-scenes-artifact")).toContainText("Klip 1");
 });
