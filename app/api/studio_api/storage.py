@@ -126,6 +126,10 @@ class ProjectStorage:
     def list_queued_ssh_jobs(self) -> list[Job]:
         return [job for job in self.list_all_jobs() if job.adapter == "ssh" and job.status == StageStatus.QUEUED]
 
+    def next_queued_ssh_job(self) -> Job | None:
+        queued_jobs = self.list_queued_ssh_jobs()
+        return queued_jobs[0] if queued_jobs else None
+
     def save_lyrics(self, project_id: str, lyrics: LyricsArtifact) -> LyricsArtifact:
         (self.project_dir(project_id) / "lyrics.json").write_text(
             json.dumps(lyrics.model_dump(mode="json"), ensure_ascii=False, indent=2),

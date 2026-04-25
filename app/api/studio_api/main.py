@@ -12,6 +12,8 @@ from .models import (
     ArtifactInventoryItem,
     BriefInput,
     ComplianceReportArtifact,
+    DispatchNextInput,
+    DispatchNextResult,
     EpisodeSpec,
     EpisodeSpecInput,
     FullEpisodeArtifact,
@@ -167,6 +169,28 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             if queued_job.id == job.id:
                 return index
         return 0
+
+    def execute_locked_ssh_job(job: Job, project: Project, profile: ServerProfile) -> Job:
+        job.status = StageStatus.RUNNING
+        job.message = "SSH worker acquired; generating server artifacts."
+        job.updated_at = utc_now()
+        storage.save_job(job)
+        set_pipeline_stage(project, job.stage, job)
+        storage.save_project(project)
+        try:
+            remote_run = ssh_server.run_remote_pilot(project_id=job.project_id, brief=project.brief, stage=job.stage, profile=profile, job_id=job.id)
+            storage.save_remote_pilot_run(job.project_id, remote_run)
+            job.status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if job.stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
+            job.message = remote_run.message
+            job.updated_at = remote_run.updated_at
+        except Exception as exc:
+            job.status = StageStatus.FAILED
+            job.message = str(exc) or "SSH worker failed."
+            job.updated_at = utc_now()
+        storage.save_job(job)
+        set_pipeline_stage(project, job.stage, job)
+        storage.save_project(project)
+        return job
 
     app = FastAPI(title="AI Kids Music Studio API", version="0.1.0")
     app.add_middleware(
@@ -439,24 +463,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                 storage.save_project(project)
                 return job
 
-            job.status = StageStatus.RUNNING
-            job.message = "SSH worker acquired; generating server artifacts."
-            job.updated_at = utc_now()
-            storage.save_job(job)
-            set_pipeline_stage(project, stage, job)
-            storage.save_project(project)
             try:
-                remote_run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=stage, profile=profile, job_id=job.id)
-                storage.save_remote_pilot_run(project_id, remote_run)
-                job.status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
-                job.message = remote_run.message
-                job.updated_at = remote_run.updated_at
-                storage.save_job(job)
-            except Exception as exc:
-                job.status = StageStatus.FAILED
-                job.message = str(exc) or "SSH worker failed."
-                job.updated_at = utc_now()
-                storage.save_job(job)
+                job = execute_locked_ssh_job(job, project, profile)
             finally:
                 storage.release_worker_lock(SSH_WORKER_RESOURCE, job.id)
         else:
@@ -492,6 +500,37 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         set_pipeline_stage(project, stage, job)
         storage.save_project(project)
         return job
+
+    @app.post("/api/jobs/dispatch-next", response_model=DispatchNextResult)
+    def dispatch_next_job(dispatch_input: DispatchNextInput) -> DispatchNextResult:
+        if dispatch_input.adapter != "ssh" or dispatch_input.resource != SSH_WORKER_RESOURCE:
+            return DispatchNextResult(status="idle", reason="unsupported_resource")
+        profile = storage.get_server_profile()
+        if profile is None or profile.mode != "ssh":
+            return DispatchNextResult(status="idle", reason="ssh_profile_required")
+        queued_job = storage.next_queued_ssh_job()
+        if queued_job is None:
+            return DispatchNextResult(status="idle", reason="no_queued_jobs_or_lock_busy")
+        project = storage.get_project(queued_job.project_id)
+        if project is None:
+            return DispatchNextResult(status="idle", reason="project_not_found")
+        lock = storage.acquire_worker_lock(SSH_WORKER_RESOURCE, queued_job.id)
+        if lock is None:
+            return DispatchNextResult(status="idle", reason="no_queued_jobs_or_lock_busy")
+
+        previous_status = queued_job.status.value
+        try:
+            dispatched_job = execute_locked_ssh_job(queued_job, project, profile)
+        finally:
+            storage.release_worker_lock(SSH_WORKER_RESOURCE, queued_job.id)
+        return DispatchNextResult(
+            status="dispatched",
+            job_id=dispatched_job.id,
+            previous_status=previous_status,
+            new_status=dispatched_job.status.value,
+            queue_position=queue_position_for(dispatched_job),
+            runner=GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released"),
+        )
 
     @app.get("/api/projects/{project_id}/jobs/{job_id}/artifacts", response_model=list[GenerationArtifact])
     def list_job_artifacts(project_id: str, job_id: str) -> list[GenerationArtifact]:

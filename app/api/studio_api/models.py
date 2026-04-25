@@ -513,6 +513,21 @@ class GenerationRunnerState(BaseModel):
     state: Literal["waiting", "acquired", "released"]
 
 
+class DispatchNextInput(BaseModel):
+    adapter: Literal["ssh"] = "ssh"
+    resource: str = "ssh_default"
+
+
+class DispatchNextResult(BaseModel):
+    status: Literal["dispatched", "idle"]
+    reason: str | None = None
+    job_id: str | None = None
+    previous_status: str | None = None
+    new_status: str | None = None
+    queue_position: int = 0
+    runner: GenerationRunnerState | None = None
+
+
 class GenerationJobDetail(BaseModel):
     id: str
     job_id: str

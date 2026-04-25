@@ -374,6 +374,116 @@ def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypa
     assert not (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
 
+def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Dispatch server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    lock_file = locks_dir / "ssh_default.json"
+    lock_file.write_text(
+        json.dumps(
+            {
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if command[-1].startswith("cat "):
+            return Completed(stdout=json.dumps(remote_output_fixture(project["id"])))
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    queued_job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
+    lock_file.unlink()
+    response = client.post("/api/jobs/dispatch-next", json={"adapter": "ssh", "resource": "ssh_default"})
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "dispatched"
+    assert result["job_id"] == queued_job["id"]
+    assert result["previous_status"] == "queued"
+    assert result["new_status"] == "needs_review"
+    assert result["queue_position"] == 0
+    assert result["runner"] == {"mode": "single_flight", "resource": "ssh_default", "state": "released"}
+    dispatched_detail = client.get(f"/api/jobs/{queued_job['id']}").json()
+    assert dispatched_detail["status"] == "succeeded"
+    assert dispatched_detail["phase"] == "awaiting_review"
+    assert dispatched_detail["preview"]["lyrics"] == "Colors in the rhythm\n"
+    project_after_dispatch = client.get(f"/api/projects/{project['id']}").json()
+    lyrics_stage = next(stage for stage in project_after_dispatch["pipeline"] if stage["stage"] == "lyrics.generate")
+    assert lyrics_stage["status"] == "needs_review"
+    assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{queued_job['id']}.json").exists()
+    assert not lock_file.exists()
+
+
+def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+
+    response = client.post("/api/jobs/dispatch-next", json={"adapter": "ssh", "resource": "ssh_default"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "idle",
+        "reason": "no_queued_jobs_or_lock_busy",
+        "job_id": None,
+        "previous_status": None,
+        "new_status": None,
+        "queue_position": 0,
+        "runner": None,
+    }
+
+
 def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monkeypatch) -> None:
     client = make_client(tmp_path)
     project = client.post(
