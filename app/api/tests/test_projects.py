@@ -200,6 +200,34 @@ def test_project_jobs_can_be_listed_in_creation_order(tmp_path: Path) -> None:
     assert jobs[1]["status"] == "needs_review"
 
 
+def test_project_stage_approvals_can_be_listed_in_approval_order(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Audyt akceptacji",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "spokój",
+            "educational_goal": "dziecko rozpoznaje kolor czerwony",
+            "characters": [],
+        },
+    ).json()
+
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={"note": "Brief gotowy."})
+    client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+    client.post(f"/api/projects/{created['id']}/stages/lyrics.generate/approve", json={"note": "Tekst bezpieczny."})
+
+    response = client.get(f"/api/projects/{created['id']}/approvals")
+
+    assert response.status_code == 200
+    approvals = response.json()
+    assert [approval["stage"] for approval in approvals] == ["brief.generate", "lyrics.generate"]
+    assert [approval["note"] for approval in approvals] == ["Brief gotowy.", "Tekst bezpieczny."]
+    assert [approval["status"] for approval in approvals] == ["completed", "completed"]
+    assert approvals[0]["approved_at"] <= approvals[1]["approved_at"]
+
+
 def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

@@ -14,6 +14,7 @@ import {
   fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
+  fetchProjectApprovals,
   fetchProjectJobs,
   fetchPublishPackageArtifact,
   fetchProjects,
@@ -35,6 +36,7 @@ import {
   ServerConnection,
   ServerProfile,
   ServerProfileInput,
+  StageApproval,
   StoryboardArtifact,
   testServerConnection,
   VideoScenesArtifact
@@ -108,6 +110,7 @@ export default function Home() {
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
+  const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -265,6 +268,11 @@ export default function Home() {
     } catch {
       setProjectJobs([]);
     }
+    try {
+      setStageApprovals(await fetchProjectApprovals(projectId));
+    } catch {
+      setStageApprovals([]);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -294,6 +302,7 @@ export default function Home() {
       setPublishPackageArtifact(null);
       setArtifactInventory([]);
       setProjectJobs([]);
+      setStageApprovals([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -347,6 +356,7 @@ export default function Home() {
       const updated = await approveStage(selectedProject.id, stage, `Operator approved ${stage}.`);
       setSelectedProject(updated);
       setProjects((current) => [updated, ...current.filter((project) => project.id !== updated.id)]);
+      await loadArtifacts(updated.id);
       setJobMessage(`${stageLabels[stage] ?? stage} zatwierdzony.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się zatwierdzić etapu.");
@@ -677,6 +687,30 @@ export default function Home() {
                       <span className="status-pill bg-white/10 text-white/64">{job.adapter}</span>
                       <span className={`status-pill ${statusClass(job.status)}`}>{statusLabels[job.status] ?? job.status}</span>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4" data-testid="approval-history">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-black">Akceptacje</p>
+              <span className="status-pill bg-white/10 text-white/70">{stageApprovals.length}</span>
+            </div>
+            {stageApprovals.length === 0 ? (
+              <p className="mt-3 text-sm text-white/45">Tutaj pojawią się decyzje operatora.</p>
+            ) : (
+              <div className="mt-4 grid max-h-64 gap-2 overflow-y-auto pr-1">
+                {stageApprovals.map((approval) => (
+                  <div key={approval.id} className="rounded-xl bg-white/7 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black">{stageLabels[approval.stage] ?? approval.stage}</p>
+                        <p className="truncate text-xs text-white/42">{approval.stage}</p>
+                      </div>
+                      <span className="status-pill shrink-0 bg-[var(--teal)] text-[#07110f]">gotowe</span>
+                    </div>
+                    {approval.note ? <p className="mt-3 text-sm leading-6 text-white/62">{approval.note}</p> : null}
                   </div>
                 ))}
               </div>

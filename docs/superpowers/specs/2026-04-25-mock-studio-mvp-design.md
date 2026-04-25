@@ -24,6 +24,7 @@ The backend exposes:
 - `POST /api/projects`: create a project from title, topic, age range, emotional tone, educational goal, and optional characters.
 - `GET /api/projects/{project_id}`: read project details and pipeline state.
 - `GET /api/projects/{project_id}/jobs`: list all job manifests for a project in creation order.
+- `GET /api/projects/{project_id}/approvals`: list all human approval manifests for a project in approval order.
 - `POST /api/projects/{project_id}/jobs/{stage}`: submit a mock job for a pipeline stage.
 - `GET /api/jobs/{job_id}`: read job status.
 - `POST /api/server/test-connection`: return mock server connectivity status.
@@ -81,6 +82,8 @@ The mock `publish.prepare_package` stage creates a completed `publish-package.js
 The backend also exposes `GET /api/projects/{project_id}/artifacts` as a manifest inventory for the selected project. It returns the generated artifact filenames, normalized artifact types, project-relative paths, availability, and filesystem update timestamps. The cockpit renders this inventory as a compact artifact register so operators can see the full production trail while reviewing the latest artifact panel.
 
 The backend exposes `GET /api/projects/{project_id}/jobs` as a project job ledger. It returns saved job manifests in creation order, including stage, adapter, status, message, and timestamps. The cockpit renders this as a compact history panel beside the artifact register so operators can audit what ran locally before the real SSH worker is introduced.
+
+The backend exposes `GET /api/projects/{project_id}/approvals` as a human review ledger. It returns saved approval manifests in approval order, including stage, note, status, and approval timestamp. The cockpit renders this as a compact acceptance history so operators can audit which human-gated stages were cleared before packaging.
 
 ## Testing
 

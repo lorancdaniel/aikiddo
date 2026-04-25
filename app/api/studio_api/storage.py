@@ -211,6 +211,16 @@ class ProjectStorage:
         )
         return approval
 
+    def list_stage_approvals(self, project_id: str) -> list[StageApproval]:
+        reviews_dir = self.project_dir(project_id) / "reviews"
+        if not reviews_dir.exists():
+            return []
+        approvals = [
+            StageApproval.model_validate_json(approval_file.read_text(encoding="utf-8"))
+            for approval_file in sorted(reviews_dir.glob("*.approval.json"))
+        ]
+        return sorted(approvals, key=lambda approval: approval.approved_at)
+
     def save_server_profile(self, profile_input: ServerProfileInput) -> ServerProfile:
         self.studio_dir.mkdir(parents=True, exist_ok=True)
         profile = ServerProfile(updated_at=utc_now(), **profile_input.model_dump())

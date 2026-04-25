@@ -39,6 +39,15 @@ export type Job = {
   updated_at: string;
 };
 
+export type StageApproval = {
+  id: string;
+  project_id: string;
+  stage: string;
+  status: "completed";
+  note: string;
+  approved_at: string;
+};
+
 export type ServerConnection = {
   mode: "mock";
   reachable: boolean;
@@ -239,6 +248,10 @@ export function fetchProjects() {
 
 export function fetchProjectJobs(projectId: string) {
   return request<Job[]>(`/api/projects/${projectId}/jobs`);
+}
+
+export function fetchProjectApprovals(projectId: string) {
+  return request<StageApproval[]>(`/api/projects/${projectId}/approvals`);
 }
 
 export function createProject(input: ProjectInput) {
