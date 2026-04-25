@@ -164,6 +164,25 @@ export type ReelsArtifact = {
   created_at: string;
 };
 
+export type ComplianceCheck = {
+  id: string;
+  label: string;
+  status: "pass" | "review";
+  evidence: string;
+};
+
+export type ComplianceReportArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  overall_status: "ready_for_human_review";
+  episode_output_path: string;
+  reel_output_paths: string[];
+  checks: ComplianceCheck[];
+  operator_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -249,6 +268,10 @@ export function fetchFullEpisodeArtifact(projectId: string) {
 
 export function fetchReelsArtifact(projectId: string) {
   return request<ReelsArtifact>(`/api/projects/${projectId}/artifacts/reels`);
+}
+
+export function fetchComplianceReportArtifact(projectId: string) {
+  return request<ComplianceReportArtifact>(`/api/projects/${projectId}/artifacts/compliance-report`);
 }
 
 export function runStage(projectId: string, stage: string) {

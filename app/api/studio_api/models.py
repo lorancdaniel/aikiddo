@@ -171,6 +171,25 @@ class ReelsArtifact(BaseModel):
     created_at: str
 
 
+class ComplianceCheck(BaseModel):
+    id: str
+    label: str
+    status: Literal["pass", "review"]
+    evidence: str
+
+
+class ComplianceReportArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    overall_status: Literal["ready_for_human_review"]
+    episode_output_path: str
+    reel_output_paths: list[str]
+    checks: list[ComplianceCheck]
+    operator_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

@@ -4,10 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
 import {
   approveStage,
+  ComplianceReportArtifact,
   createProject,
+  fetchComplianceReportArtifact,
   fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
   fetchProjects,
@@ -96,6 +98,7 @@ export default function Home() {
   const [videoScenesArtifact, setVideoScenesArtifact] = useState<VideoScenesArtifact | null>(null);
   const [fullEpisodeArtifact, setFullEpisodeArtifact] = useState<FullEpisodeArtifact | null>(null);
   const [reelsArtifact, setReelsArtifact] = useState<ReelsArtifact | null>(null);
+  const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -233,6 +236,11 @@ export default function Home() {
     } catch {
       setReelsArtifact(null);
     }
+    try {
+      setComplianceReportArtifact(await fetchComplianceReportArtifact(projectId));
+    } catch {
+      setComplianceReportArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -258,6 +266,7 @@ export default function Home() {
       setVideoScenesArtifact(null);
       setFullEpisodeArtifact(null);
       setReelsArtifact(null);
+      setComplianceReportArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -604,7 +613,51 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {reelsArtifact ? (
+          {complianceReportArtifact ? (
+            <div className="p-5 md:p-7" data-testid="compliance-report-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Kontrola jakości</h2>
+                  <p className="mt-2 text-sm text-white/52">{complianceReportArtifact.topic} · {complianceReportArtifact.age_range}</p>
+                </div>
+                <ListChecks className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
+                <p className="text-sm font-black">Status raportu</p>
+                <p className="mt-3 text-3xl font-black leading-tight">Gotowy do akceptacji człowieka</p>
+                <p className="mt-4 text-sm font-semibold">{complianceReportArtifact.episode_output_path}</p>
+              </div>
+              <div className="mt-4 grid gap-3">
+                {complianceReportArtifact.checks.map((check) => (
+                  <div key={check.id} className="rounded-2xl border border-white/10 bg-white/7 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-black">{check.label}</p>
+                      <span className={`status-pill ${check.status === "pass" ? "bg-[var(--teal)] text-[#07110f]" : "bg-[var(--acid)] text-[#101200]"}`}>
+                        {check.status === "pass" ? "pass" : "review"}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-white/68">{check.evidence}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4">
+                <p className="text-sm font-black text-[var(--teal)]">Outputy rolek</p>
+                <div className="mt-3 space-y-2 text-sm text-white/70">
+                  {complianceReportArtifact.reel_output_paths.map((path) => (
+                    <p key={path}>{path}</p>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 rounded-2xl bg-black/25 p-4">
+                <p className="text-sm font-black text-[var(--acid)]">Notatki operatora</p>
+                <ul className="mt-3 space-y-2 text-sm text-white/68">
+                  {complianceReportArtifact.operator_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : reelsArtifact ? (
             <div className="p-5 md:p-7" data-testid="reels-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

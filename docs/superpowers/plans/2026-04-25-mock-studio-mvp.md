@@ -273,3 +273,21 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Add API access to the reels artifact.
 - [x] Render vertical reel manifests, output paths, captions, and distribution notes in the cockpit.
 - [x] Verify the artifact appears after the full episode render.
+
+### Follow-up Completed: Mock Compliance Report
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Generate `compliance-report.json` when `quality.compliance_report` runs.
+- [x] Keep the compliance stage human-gated in `needs_review`.
+- [x] Add API access to the compliance artifact.
+- [x] Render checks, linked output paths, and operator notes in the cockpit.
+- [x] Verify the artifact appears after reels render and can be approved.

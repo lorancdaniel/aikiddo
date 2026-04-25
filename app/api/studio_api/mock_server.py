@@ -3,6 +3,8 @@ from uuid import uuid4
 from .models import (
     HUMAN_REVIEW_STAGES,
     Brief,
+    ComplianceCheck,
+    ComplianceReportArtifact,
     FullEpisodeArtifact,
     Job,
     KeyframeFrame,
@@ -284,6 +286,56 @@ class MockGpuServer:
                 "Każda rolka ma pionowy kadr 9:16 i mieści się w limicie krótkiego formatu.",
                 "Hooki są opisowe, bez obietnic nagród za dalsze oglądanie.",
                 "Manifest może być użyty później przez adapter SSH do faktycznego renderu shortów.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_compliance_report(
+        self,
+        brief: Brief,
+        episode: FullEpisodeArtifact | None = None,
+        reels: ReelsArtifact | None = None,
+    ) -> ComplianceReportArtifact:
+        episode_slug = episode.episode_slug if episode else _slugify(brief.title)
+        episode_output_path = episode.output_path if episode else f"renders/{episode_slug}/full-episode.mp4"
+        reel_output_paths = [reel.output_path for reel in reels.reels] if reels else [f"renders/{episode_slug}/reel-01.mp4"]
+        return ComplianceReportArtifact(
+            title=brief.title,
+            topic=brief.topic,
+            age_range=brief.age_range,
+            overall_status="ready_for_human_review",
+            episode_output_path=episode_output_path,
+            reel_output_paths=reel_output_paths,
+            checks=[
+                ComplianceCheck(
+                    id="check_language",
+                    label="Język i ton",
+                    status="pass",
+                    evidence="Tekst używa prostych, wspierających fraz bez presji i straszenia.",
+                ),
+                ComplianceCheck(
+                    id="check_sensory",
+                    label="Tempo i bodźce",
+                    status="pass",
+                    evidence="Sceny, keyframes i przejścia deklarują spokojny ruch bez migotania.",
+                ),
+                ComplianceCheck(
+                    id="check_completion",
+                    label="Domknięcie historii",
+                    status="pass",
+                    evidence="Pełny odcinek i rolki mają kompletne zakończenia bez cliffhangerów.",
+                ),
+                ComplianceCheck(
+                    id="check_distribution",
+                    label="Formaty publikacji",
+                    status="review",
+                    evidence="Operator powinien ręcznie sprawdzić miniaturę, opis i finalne ustawienia kanału.",
+                ),
+            ],
+            operator_notes=[
+                "Raport jest gotowy do ludzkiej akceptacji przed przygotowaniem paczki publikacyjnej.",
+                "Mock nie analizuje prawdziwych pikseli ani audio; sprawdza kontrakty manifestów.",
+                "Adapter SSH powinien później podmienić tę sekcję na walidację realnych plików renderu.",
             ],
             created_at=utc_now(),
         )
