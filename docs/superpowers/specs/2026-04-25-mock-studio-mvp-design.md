@@ -69,6 +69,8 @@ The mock `keyframes.generate` stage creates a reviewable `keyframes.json` artifa
 
 The mock `video.scenes.generate` stage creates a reviewable `video-scenes.json` artifact after keyframes approval. Each clip maps back to a source keyframe and includes duration, motion prompt, camera motion, transition, and safety note. The cockpit promotes video scenes above keyframes so the review surface follows the active pipeline stage.
 
+The mock `render.full_episode` stage creates a completed `full-episode.json` manifest after video scene approval. The manifest records slug, total duration, scene count, mock output path, poster frame, audio mix note, and assembly notes. Because this stage is not human-gated in the MVP pipeline, it completes immediately and the cockpit promotes the episode manifest as the latest artifact.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

@@ -1,6 +1,40 @@
 from uuid import uuid4
 
-from .models import HUMAN_REVIEW_STAGES, Brief, Job, KeyframeFrame, KeyframesArtifact, LyricsArtifact, ServerConnection, ServerProfile, StageStatus, StoryboardArtifact, StoryboardScene, VideoSceneClip, VideoScenesArtifact, utc_now
+from .models import (
+    HUMAN_REVIEW_STAGES,
+    Brief,
+    FullEpisodeArtifact,
+    Job,
+    KeyframeFrame,
+    KeyframesArtifact,
+    LyricsArtifact,
+    ServerConnection,
+    ServerProfile,
+    StageStatus,
+    StoryboardArtifact,
+    StoryboardScene,
+    VideoSceneClip,
+    VideoScenesArtifact,
+    utc_now,
+)
+
+
+def _slugify(value: str) -> str:
+    normalized = value.lower()
+    replacements = {
+        "ą": "a",
+        "ć": "c",
+        "ę": "e",
+        "ł": "l",
+        "ń": "n",
+        "ó": "o",
+        "ś": "s",
+        "ż": "z",
+        "ź": "z",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    return "-".join("".join(character if character.isalnum() else " " for character in normalized).split())
 
 
 class MockGpuServer:
@@ -175,6 +209,28 @@ class MockGpuServer:
                 "Każda scena zachowuje spokojne tempo i miękkie przejścia.",
                 "Ruch kamery bazuje na zatwierdzonych keyframes, bez nagłych skoków.",
                 "Klipy są gotowe do późniejszego złożenia w pełny odcinek.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_full_episode(self, brief: Brief, video_scenes: VideoScenesArtifact | None = None) -> FullEpisodeArtifact:
+        scenes = video_scenes.scenes if video_scenes else self.generate_video_scenes(brief).scenes
+        duration_seconds = sum(scene.duration_seconds for scene in scenes)
+        episode_slug = _slugify(brief.title)
+        return FullEpisodeArtifact(
+            title=brief.title,
+            topic=brief.topic,
+            age_range=brief.age_range,
+            episode_slug=episode_slug,
+            duration_seconds=duration_seconds,
+            scene_count=len(scenes),
+            output_path=f"renders/{episode_slug}/full-episode.mp4",
+            poster_frame=scenes[0].source_keyframe_id if scenes else "keyframe_01",
+            audio_mix="mock stereo mix with gentle limiter and child-safe loudness target",
+            assembly_notes=[
+                "Sceny są złożone w kolejności storyboardu.",
+                "Przejścia używają miękkich dissolve/fade bez gwałtownych błysków.",
+                "Manifest jest gotowy jako wejście dla renderów reels i kontroli jakości.",
             ],
             created_at=utc_now(),
         )

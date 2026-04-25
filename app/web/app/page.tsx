@@ -4,16 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Sparkles, Wand2 } from "lucide-react";
 import {
   approveStage,
   createProject,
+  fetchFullEpisodeArtifact,
   fetchKeyframesArtifact,
   fetchProjects,
   fetchLyricsArtifact,
   fetchServerProfile,
   fetchStoryboardArtifact,
   fetchVideoScenesArtifact,
+  FullEpisodeArtifact,
   KeyframesArtifact,
   LyricsArtifact,
   Project,
@@ -90,6 +92,7 @@ export default function Home() {
   const [storyboardArtifact, setStoryboardArtifact] = useState<StoryboardArtifact | null>(null);
   const [keyframesArtifact, setKeyframesArtifact] = useState<KeyframesArtifact | null>(null);
   const [videoScenesArtifact, setVideoScenesArtifact] = useState<VideoScenesArtifact | null>(null);
+  const [fullEpisodeArtifact, setFullEpisodeArtifact] = useState<FullEpisodeArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -217,6 +220,11 @@ export default function Home() {
     } catch {
       setVideoScenesArtifact(null);
     }
+    try {
+      setFullEpisodeArtifact(await fetchFullEpisodeArtifact(projectId));
+    } catch {
+      setFullEpisodeArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -240,6 +248,7 @@ export default function Home() {
       setStoryboardArtifact(null);
       setKeyframesArtifact(null);
       setVideoScenesArtifact(null);
+      setFullEpisodeArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -586,7 +595,50 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {videoScenesArtifact ? (
+          {fullEpisodeArtifact ? (
+            <div className="p-5 md:p-7" data-testid="full-episode-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Odcinek</h2>
+                  <p className="mt-2 text-sm text-white/52">{fullEpisodeArtifact.topic} · {fullEpisodeArtifact.age_range}</p>
+                </div>
+                <Sparkles className="text-[var(--acid)]" size={28} />
+              </div>
+              <div
+                className="overflow-hidden rounded-2xl border border-white/10 bg-cover bg-center p-5"
+                style={{
+                  backgroundImage:
+                    `linear-gradient(180deg, rgba(12,12,13,0.18), rgba(12,12,13,0.9)), url(https://picsum.photos/seed/${fullEpisodeArtifact.episode_slug}/900/620)`
+                }}
+              >
+                <p className="text-sm font-black text-[var(--acid)]">{fullEpisodeArtifact.episode_slug}</p>
+                <p className="mt-28 max-w-sm text-3xl font-black leading-tight">{fullEpisodeArtifact.title}</p>
+                <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-2xl bg-black/35 p-3">
+                    <p className="text-white/45">Czas</p>
+                    <p className="mt-1 font-black">{fullEpisodeArtifact.duration_seconds}s</p>
+                  </div>
+                  <div className="rounded-2xl bg-black/35 p-3">
+                    <p className="text-white/45">Sceny</p>
+                    <p className="mt-1 font-black">{fullEpisodeArtifact.scene_count}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4">
+                <p className="text-sm font-black text-[var(--teal)]">Manifest renderu</p>
+                <p className="mt-2 text-sm leading-6 text-white/70">{fullEpisodeArtifact.output_path}</p>
+                <p className="mt-3 text-xs text-white/45">{fullEpisodeArtifact.audio_mix}</p>
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Składanie odcinka</p>
+                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                  {fullEpisodeArtifact.assembly_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : videoScenesArtifact ? (
             <div className="p-5 md:p-7" data-testid="video-scenes-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .mock_server import MockGpuServer
 from .models import (
     BriefInput,
+    FullEpisodeArtifact,
     Job,
     KeyframesArtifact,
     LyricsArtifact,
@@ -110,6 +111,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             storage.save_keyframes(project_id, mock_server.generate_keyframes(project.brief, storage.get_storyboard(project_id)))
         if stage == "video.scenes.generate":
             storage.save_video_scenes(project_id, mock_server.generate_video_scenes(project.brief, storage.get_keyframes(project_id)))
+        if stage == "render.full_episode":
+            storage.save_full_episode(project_id, mock_server.generate_full_episode(project.brief, storage.get_video_scenes(project_id)))
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
@@ -194,6 +197,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if video_scenes is None:
             raise HTTPException(status_code=404, detail="Video scenes artifact not found")
         return video_scenes
+
+    @app.get("/api/projects/{project_id}/artifacts/full-episode", response_model=FullEpisodeArtifact)
+    def get_full_episode_artifact(project_id: str) -> FullEpisodeArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        episode = storage.get_full_episode(project_id)
+        if episode is None:
+            raise HTTPException(status_code=404, detail="Full episode artifact not found")
+        return episode
 
     return app
 

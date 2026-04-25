@@ -66,4 +66,11 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await expect(page.getByTestId("stage-video.scenes.generate")).toContainText("do akceptacji");
   await expect(page.getByTestId("video-scenes-artifact")).toContainText("Sceny wideo");
   await expect(page.getByTestId("video-scenes-artifact")).toContainText("Klip 1");
+  await page.getByTestId("approve-video.scenes.generate").click();
+  await expect(page.getByTestId("stage-video.scenes.generate")).toContainText("gotowe");
+
+  await page.getByTestId("run-render.full_episode").click();
+  await expect(page.getByTestId("stage-render.full_episode")).toContainText("gotowe");
+  await expect(page.getByTestId("full-episode-artifact")).toContainText("Odcinek");
+  await expect(page.getByTestId("full-episode-artifact")).toContainText("full-episode.mp4");
 });

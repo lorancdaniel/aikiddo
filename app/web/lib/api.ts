@@ -129,6 +129,20 @@ export type VideoScenesArtifact = {
   created_at: string;
 };
 
+export type FullEpisodeArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  episode_slug: string;
+  duration_seconds: number;
+  scene_count: number;
+  output_path: string;
+  poster_frame: string;
+  audio_mix: string;
+  assembly_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -206,6 +220,10 @@ export function fetchKeyframesArtifact(projectId: string) {
 
 export function fetchVideoScenesArtifact(projectId: string) {
   return request<VideoScenesArtifact>(`/api/projects/${projectId}/artifacts/video-scenes`);
+}
+
+export function fetchFullEpisodeArtifact(projectId: string) {
+  return request<FullEpisodeArtifact>(`/api/projects/${projectId}/artifacts/full-episode`);
 }
 
 export function runStage(projectId: string, stage: string) {

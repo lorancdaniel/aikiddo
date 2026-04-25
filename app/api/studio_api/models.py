@@ -136,6 +136,20 @@ class VideoScenesArtifact(BaseModel):
     created_at: str
 
 
+class FullEpisodeArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    episode_slug: str
+    duration_seconds: int
+    scene_count: int
+    output_path: str
+    poster_frame: str
+    audio_mix: str
+    assembly_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING
