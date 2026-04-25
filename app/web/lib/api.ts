@@ -48,6 +48,13 @@ export type StageApproval = {
   approved_at: string;
 };
 
+export type ProjectNextAction = {
+  action_type: "approve" | "run" | "done";
+  stage: string | null;
+  label: string;
+  message: string;
+};
+
 export type ServerConnection = {
   mode: "mock";
   reachable: boolean;
@@ -252,6 +259,10 @@ export function fetchProjectJobs(projectId: string) {
 
 export function fetchProjectApprovals(projectId: string) {
   return request<StageApproval[]>(`/api/projects/${projectId}/approvals`);
+}
+
+export function fetchProjectNextAction(projectId: string) {
+  return request<ProjectNextAction>(`/api/projects/${projectId}/next-action`);
 }
 
 export function createProject(input: ProjectInput) {

@@ -25,6 +25,7 @@ The backend exposes:
 - `GET /api/projects/{project_id}`: read project details and pipeline state.
 - `GET /api/projects/{project_id}/jobs`: list all job manifests for a project in creation order.
 - `GET /api/projects/{project_id}/approvals`: list all human approval manifests for a project in approval order.
+- `GET /api/projects/{project_id}/next-action`: read the operator's next pipeline action.
 - `POST /api/projects/{project_id}/jobs/{stage}`: submit a mock job for a pipeline stage.
 - `GET /api/jobs/{job_id}`: read job status.
 - `POST /api/server/test-connection`: return mock server connectivity status.
@@ -62,6 +63,8 @@ The first MVP already stores a local server profile in `projects/.studio/server-
 Human-gated stages can be approved through `POST /api/projects/{project_id}/stages/{stage}/approve`. Approval is allowed only while a stage is in `needs_review`; otherwise the API returns a conflict. Each approval writes a review manifest under `projects/<project_id>/reviews/<stage>.approval.json`.
 
 Pipeline execution is sequential in the MVP. A stage cannot start until the immediately previous stage is `completed`; for example, `lyrics.generate` is blocked until `brief.generate` has been approved. The UI mirrors this by disabling the lyrics action until the brief gate is complete.
+
+The backend also exposes a derived next-action contract for the selected project. It returns `approve` when the first reviewable stage is waiting for the operator, `run` when the next pending stage can be started, and `done` when the mock pipeline is complete. The cockpit renders this as a compact guidance callout above the stage board.
 
 The mock `lyrics.generate` stage creates a reviewable `lyrics.json` artifact in the project directory. The artifact includes song structure, chorus, verses, rhythm notes, and safety notes. The cockpit renders this artifact as a human-readable review panel before the operator approves the lyrics stage.
 

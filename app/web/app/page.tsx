@@ -16,6 +16,7 @@ import {
   fetchKeyframesArtifact,
   fetchProjectApprovals,
   fetchProjectJobs,
+  fetchProjectNextAction,
   fetchPublishPackageArtifact,
   fetchProjects,
   fetchLyricsArtifact,
@@ -29,6 +30,7 @@ import {
   LyricsArtifact,
   Project,
   ProjectInput,
+  ProjectNextAction,
   PublishPackageArtifact,
   ReelsArtifact,
   runStage,
@@ -111,6 +113,7 @@ export default function Home() {
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
+  const [nextAction, setNextAction] = useState<ProjectNextAction | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -273,6 +276,11 @@ export default function Home() {
     } catch {
       setStageApprovals([]);
     }
+    try {
+      setNextAction(await fetchProjectNextAction(projectId));
+    } catch {
+      setNextAction(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -303,6 +311,12 @@ export default function Home() {
       setArtifactInventory([]);
       setProjectJobs([]);
       setStageApprovals([]);
+      setNextAction({
+        action_type: "approve",
+        stage: "brief.generate",
+        label: "Brief",
+        message: "Brief czeka na akceptację operatora."
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -598,6 +612,19 @@ export default function Home() {
             </div>
           ) : null}
           {error ? <div className="mt-5 rounded-2xl bg-[var(--coral)] p-4 text-sm font-bold text-white">{error}</div> : null}
+          <div className="mt-5 rounded-2xl border border-white/10 bg-[var(--mist)] p-4 text-[var(--ink)]" data-testid="next-action">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black">Następny krok</p>
+                <p className="mt-2 text-sm font-semibold leading-6">{nextAction?.message ?? "Wybierz projekt, żeby zobaczyć prowadzenie pipeline."}</p>
+              </div>
+              {nextAction ? (
+                <span className="rounded-full bg-[var(--ink)] px-3 py-1 text-xs font-black uppercase text-white">
+                  {nextAction.action_type}
+                </span>
+              ) : null}
+            </div>
+          </div>
           <div className="stage-grid mt-7 grid gap-3 md:grid-cols-2">
             {(selectedProject?.pipeline ?? []).map((stage) => (
               <div

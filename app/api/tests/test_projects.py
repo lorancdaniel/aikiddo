@@ -228,6 +228,50 @@ def test_project_stage_approvals_can_be_listed_in_approval_order(tmp_path: Path)
     assert approvals[0]["approved_at"] <= approvals[1]["approved_at"]
 
 
+def test_project_next_action_guides_operator_through_review_and_run_steps(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Następny krok",
+            "topic": "liczenie",
+            "age_range": "4-6",
+            "emotional_tone": "ciekawość",
+            "educational_goal": "dziecko liczy do trzech",
+            "characters": [],
+        },
+    ).json()
+
+    first_action = client.get(f"/api/projects/{created['id']}/next-action")
+    assert first_action.status_code == 200
+    assert first_action.json() == {
+        "action_type": "approve",
+        "stage": "brief.generate",
+        "label": "Brief",
+        "message": "Brief czeka na akceptację operatora.",
+    }
+
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+    second_action = client.get(f"/api/projects/{created['id']}/next-action")
+    assert second_action.status_code == 200
+    assert second_action.json() == {
+        "action_type": "run",
+        "stage": "lyrics.generate",
+        "label": "Tekst",
+        "message": "Możesz uruchomić etap Tekst.",
+    }
+
+    client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+    third_action = client.get(f"/api/projects/{created['id']}/next-action")
+    assert third_action.status_code == 200
+    assert third_action.json() == {
+        "action_type": "approve",
+        "stage": "lyrics.generate",
+        "label": "Tekst",
+        "message": "Tekst czeka na akceptację operatora.",
+    }
+
+
 def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

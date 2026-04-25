@@ -29,6 +29,20 @@ PIPELINE_STAGES = [
     "publish.prepare_package",
 ]
 
+STAGE_LABELS = {
+    "brief.generate": "Brief",
+    "lyrics.generate": "Tekst",
+    "characters.import_or_approve": "Postacie",
+    "audio.generate_or_import": "Audio",
+    "storyboard.generate": "Storyboard",
+    "keyframes.generate": "Keyframes",
+    "video.scenes.generate": "Sceny",
+    "render.full_episode": "Odcinek",
+    "render.reels": "Rolki",
+    "quality.compliance_report": "Kontrola",
+    "publish.prepare_package": "Paczka",
+}
+
 HUMAN_REVIEW_STAGES = {
     "brief.generate",
     "lyrics.generate",
@@ -239,6 +253,13 @@ class Project(BaseModel):
     pipeline: list[PipelineStage]
     created_at: str
     updated_at: str
+
+
+class ProjectNextAction(BaseModel):
+    action_type: Literal["approve", "run", "done"]
+    stage: str | None
+    label: str
+    message: str
 
 
 class Job(BaseModel):

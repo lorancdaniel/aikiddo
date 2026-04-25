@@ -15,10 +15,12 @@ from .models import (
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
+    ProjectNextAction,
     PublishPackageArtifact,
     ReelsArtifact,
     ServerProfile,
     ServerProfileInput,
+    STAGE_LABELS,
     StageApproval,
     StageApprovalInput,
     StageStatus,
@@ -28,6 +30,35 @@ from .models import (
     utc_now,
 )
 from .storage import ProjectStorage
+
+
+def get_project_next_action(project: Project) -> ProjectNextAction:
+    review_stage = next((stage for stage in project.pipeline if stage.status == StageStatus.NEEDS_REVIEW), None)
+    if review_stage is not None:
+        label = STAGE_LABELS.get(review_stage.stage, review_stage.stage)
+        return ProjectNextAction(
+            action_type="approve",
+            stage=review_stage.stage,
+            label=label,
+            message=f"{label} czeka na akceptację operatora.",
+        )
+
+    runnable_stage = next((stage for stage in project.pipeline if stage.status == StageStatus.PENDING), None)
+    if runnable_stage is not None:
+        label = STAGE_LABELS.get(runnable_stage.stage, runnable_stage.stage)
+        return ProjectNextAction(
+            action_type="run",
+            stage=runnable_stage.stage,
+            label=label,
+            message=f"Możesz uruchomić etap {label}.",
+        )
+
+    return ProjectNextAction(
+        action_type="done",
+        stage=None,
+        label="Pipeline",
+        message="Pipeline mock jest domknięty.",
+    )
 
 
 def create_app(projects_root: Path | None = None) -> FastAPI:
@@ -85,6 +116,13 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return storage.list_stage_approvals(project_id)
+
+    @app.get("/api/projects/{project_id}/next-action", response_model=ProjectNextAction)
+    def read_project_next_action(project_id: str) -> ProjectNextAction:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return get_project_next_action(project)
 
     @app.post("/api/server/test-connection")
     def test_server_connection():

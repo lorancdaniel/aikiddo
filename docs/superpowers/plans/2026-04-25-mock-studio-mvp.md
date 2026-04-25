@@ -354,3 +354,18 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Return saved review manifests in approval order for human-gate audit.
 - [x] Render approval history in the cockpit with stage, note, and completed status.
 - [x] Refresh the approval ledger after each stage approval.
+
+### Follow-up Completed: Operator Next Action
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Add a derived next-action endpoint at `GET /api/projects/{project_id}/next-action`.
+- [x] Return `approve`, `run`, or `done` guidance from the current pipeline state.
+- [x] Render the guidance above the stage board in the cockpit.
+- [x] Verify the guidance changes from brief approval to lyrics run to lyrics approval.

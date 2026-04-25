@@ -25,14 +25,17 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await page.getByRole("button", { name: "Utwórz projekt" }).click();
 
   await expect(page.getByTestId("selected-project-title")).toContainText("Szczoteczka bohater");
+  await expect(page.getByTestId("next-action")).toContainText("Brief czeka na akceptację operatora.");
   await expect(page.getByTestId("run-lyrics-button")).toBeDisabled();
   await page.getByTestId("approve-brief.generate").click();
   await expect(page.getByTestId("stage-brief.generate")).toContainText("gotowe");
   await expect(page.getByText("Brief zatwierdzony.")).toBeVisible();
+  await expect(page.getByTestId("next-action")).toContainText("Możesz uruchomić etap Tekst.");
   await expect(page.getByTestId("run-lyrics-button")).toBeEnabled();
 
   await page.getByTestId("run-lyrics-button").click();
   await expect(page.getByText("Mock job for lyrics.generate finished locally.")).toBeVisible();
+  await expect(page.getByTestId("next-action")).toContainText("Tekst czeka na akceptację operatora.");
   await expect(page.getByTestId("lyrics-artifact")).toContainText("Refren");
   await expect(page.getByTestId("lyrics-artifact")).toContainText("Mycie zębów");
   await expect(page.getByTestId("stage-lyrics.generate")).toContainText("do akceptacji");
