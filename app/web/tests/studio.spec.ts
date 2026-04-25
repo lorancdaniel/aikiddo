@@ -73,4 +73,9 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await expect(page.getByTestId("stage-render.full_episode")).toContainText("gotowe");
   await expect(page.getByTestId("full-episode-artifact")).toContainText("Odcinek");
   await expect(page.getByTestId("full-episode-artifact")).toContainText("full-episode.mp4");
+
+  await page.getByTestId("run-render.reels").click();
+  await expect(page.getByTestId("stage-render.reels")).toContainText("gotowe");
+  await expect(page.getByTestId("reels-artifact")).toContainText("Rolki");
+  await expect(page.getByTestId("reels-artifact")).toContainText("reel-01.mp4");
 });

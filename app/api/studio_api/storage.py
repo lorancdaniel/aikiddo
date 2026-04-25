@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
+from .models import FullEpisodeArtifact, Job, KeyframesArtifact, LyricsArtifact, Project, ReelsArtifact, ServerProfile, ServerProfileInput, StageApproval, StoryboardArtifact, VideoScenesArtifact, utc_now
 
 
 class ProjectStorage:
@@ -112,6 +112,19 @@ class ProjectStorage:
         if not episode_file.exists():
             return None
         return FullEpisodeArtifact.model_validate_json(episode_file.read_text(encoding="utf-8"))
+
+    def save_reels(self, project_id: str, reels: ReelsArtifact) -> ReelsArtifact:
+        (self.project_dir(project_id) / "reels.json").write_text(
+            json.dumps(reels.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return reels
+
+    def get_reels(self, project_id: str) -> ReelsArtifact | None:
+        reels_file = self.project_dir(project_id) / "reels.json"
+        if not reels_file.exists():
+            return None
+        return ReelsArtifact.model_validate_json(reels_file.read_text(encoding="utf-8"))
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, Play, Server, Sparkles, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListMusic, Loader2, Music2, PanelsTopLeft, Play, Server, Sparkles, Wand2 } from "lucide-react";
 import {
   approveStage,
   createProject,
@@ -12,6 +12,7 @@ import {
   fetchKeyframesArtifact,
   fetchProjects,
   fetchLyricsArtifact,
+  fetchReelsArtifact,
   fetchServerProfile,
   fetchStoryboardArtifact,
   fetchVideoScenesArtifact,
@@ -20,6 +21,7 @@ import {
   LyricsArtifact,
   Project,
   ProjectInput,
+  ReelsArtifact,
   runStage,
   saveServerProfile,
   ServerConnection,
@@ -93,6 +95,7 @@ export default function Home() {
   const [keyframesArtifact, setKeyframesArtifact] = useState<KeyframesArtifact | null>(null);
   const [videoScenesArtifact, setVideoScenesArtifact] = useState<VideoScenesArtifact | null>(null);
   const [fullEpisodeArtifact, setFullEpisodeArtifact] = useState<FullEpisodeArtifact | null>(null);
+  const [reelsArtifact, setReelsArtifact] = useState<ReelsArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -225,6 +228,11 @@ export default function Home() {
     } catch {
       setFullEpisodeArtifact(null);
     }
+    try {
+      setReelsArtifact(await fetchReelsArtifact(projectId));
+    } catch {
+      setReelsArtifact(null);
+    }
   }
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
@@ -249,6 +257,7 @@ export default function Home() {
       setKeyframesArtifact(null);
       setVideoScenesArtifact(null);
       setFullEpisodeArtifact(null);
+      setReelsArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -595,7 +604,57 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          {fullEpisodeArtifact ? (
+          {reelsArtifact ? (
+            <div className="p-5 md:p-7" data-testid="reels-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Rolki</h2>
+                  <p className="mt-2 text-sm text-white/52">{reelsArtifact.topic} · {reelsArtifact.age_range}</p>
+                </div>
+                <PanelsTopLeft className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="grid gap-4">
+                {reelsArtifact.reels.map((reel, index) => (
+                  <div key={reel.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-white/7">
+                    <div
+                      className="min-h-64 bg-cover bg-center p-4 transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+                      style={{
+                        backgroundImage:
+                          `linear-gradient(180deg, rgba(12,12,13,0.04), rgba(12,12,13,0.9)), url(https://picsum.photos/seed/${reel.id}-${reel.source_episode_slug}/720/1100)`
+                      }}
+                    >
+                      <div className="flex flex-wrap gap-2 text-xs font-black">
+                        <span className="rounded-full bg-[var(--acid)] px-3 py-1 text-[var(--ink)]">Rolka {index + 1}</span>
+                        <span className="rounded-full bg-black/45 px-3 py-1 text-white">{reel.aspect_ratio}</span>
+                        <span className="rounded-full bg-black/45 px-3 py-1 text-white">{reel.duration_seconds}s</span>
+                      </div>
+                      <p className="mt-32 max-w-xs text-2xl font-black leading-tight">{reel.hook}</p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm font-black text-[var(--teal)]">{reel.output_path}</p>
+                      <p className="mt-2 text-sm leading-6 text-white/70">{reel.caption}</p>
+                      <p className="mt-3 text-xs text-white/45">{reel.safety_note}</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {reel.source_scene_ids.map((sceneId) => (
+                          <span key={`${reel.id}-${sceneId}`} className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-xs text-white/60">
+                            {sceneId}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl bg-[var(--mist)] p-4 text-[var(--ink)]">
+                <p className="text-sm font-black">Dystrybucja</p>
+                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                  {reelsArtifact.distribution_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : fullEpisodeArtifact ? (
             <div className="p-5 md:p-7" data-testid="full-episode-artifact">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>

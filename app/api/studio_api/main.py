@@ -13,6 +13,7 @@ from .models import (
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
+    ReelsArtifact,
     ServerProfile,
     ServerProfileInput,
     StageApproval,
@@ -113,6 +114,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             storage.save_video_scenes(project_id, mock_server.generate_video_scenes(project.brief, storage.get_keyframes(project_id)))
         if stage == "render.full_episode":
             storage.save_full_episode(project_id, mock_server.generate_full_episode(project.brief, storage.get_video_scenes(project_id)))
+        if stage == "render.reels":
+            storage.save_reels(project_id, mock_server.generate_reels(project.brief, storage.get_full_episode(project_id)))
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
@@ -207,6 +210,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if episode is None:
             raise HTTPException(status_code=404, detail="Full episode artifact not found")
         return episode
+
+    @app.get("/api/projects/{project_id}/artifacts/reels", response_model=ReelsArtifact)
+    def get_reels_artifact(project_id: str) -> ReelsArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        reels = storage.get_reels(project_id)
+        if reels is None:
+            raise HTTPException(status_code=404, detail="Reels artifact not found")
+        return reels
 
     return app
 

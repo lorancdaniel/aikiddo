@@ -256,3 +256,20 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Add API access to the full episode artifact.
 - [x] Render episode duration, scene count, output path, audio mix, and assembly notes in the cockpit.
 - [x] Verify the artifact appears after video scene approval.
+
+### Follow-up Completed: Mock Reels Render
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Generate `reels.json` when `render.reels` runs.
+- [x] Add API access to the reels artifact.
+- [x] Render vertical reel manifests, output paths, captions, and distribution notes in the cockpit.
+- [x] Verify the artifact appears after the full episode render.

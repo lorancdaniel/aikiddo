@@ -71,6 +71,8 @@ The mock `video.scenes.generate` stage creates a reviewable `video-scenes.json` 
 
 The mock `render.full_episode` stage creates a completed `full-episode.json` manifest after video scene approval. The manifest records slug, total duration, scene count, mock output path, poster frame, audio mix note, and assembly notes. Because this stage is not human-gated in the MVP pipeline, it completes immediately and the cockpit promotes the episode manifest as the latest artifact.
 
+The mock `render.reels` stage creates a completed `reels.json` manifest after the full episode render. It contains three vertical short-form clips with source episode slug, source scene ids, duration, 9:16 aspect ratio, hook, mock output path, caption, safety note, and distribution guidance. This keeps the future SSH worker contract clear: full episodes and short clips are separate render outputs, but both are represented as deterministic manifests in local mock mode.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

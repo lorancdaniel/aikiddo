@@ -381,6 +381,58 @@ def test_full_episode_render_writes_completed_episode_artifact(tmp_path: Path) -
     assert stage["job_id"] == job["id"]
 
 
+def test_reels_render_writes_completed_reels_artifact(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Kolorowa przygoda",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "radość",
+            "educational_goal": "dziecko rozpoznaje kolory w scenach",
+            "characters": ["rainbow_friend_v1"],
+        },
+    ).json()
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+    client.post(f"/api/projects/{created['id']}/stages/lyrics.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/characters.import_or_approve")
+    client.post(f"/api/projects/{created['id']}/stages/characters.import_or_approve/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/audio.generate_or_import")
+    client.post(f"/api/projects/{created['id']}/jobs/storyboard.generate")
+    client.post(f"/api/projects/{created['id']}/stages/storyboard.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/keyframes.generate")
+    client.post(f"/api/projects/{created['id']}/stages/keyframes.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/video.scenes.generate")
+    client.post(f"/api/projects/{created['id']}/stages/video.scenes.generate/approve", json={})
+    client.post(f"/api/projects/{created['id']}/jobs/render.full_episode")
+
+    response = client.post(f"/api/projects/{created['id']}/jobs/render.reels")
+
+    assert response.status_code == 202
+    job = response.json()
+    assert job["stage"] == "render.reels"
+    assert job["status"] == "completed"
+
+    reels_file = tmp_path / "projects" / created["id"] / "reels.json"
+    reels = json.loads(reels_file.read_text())
+    assert reels["title"] == "Kolorowa przygoda"
+    assert len(reels["reels"]) == 3
+    assert reels["reels"][0]["aspect_ratio"] == "9:16"
+    assert reels["reels"][0]["output_path"].endswith("reel-01.mp4")
+    assert reels["distribution_notes"]
+
+    artifact_response = client.get(f"/api/projects/{created['id']}/artifacts/reels")
+    assert artifact_response.status_code == 200
+    assert artifact_response.json() == reels
+
+    project = client.get(f"/api/projects/{created['id']}").json()
+    stage = next(item for item in project["pipeline"] if item["stage"] == "render.reels")
+    assert stage["status"] == "completed"
+    assert stage["job_id"] == job["id"]
+
+
 def test_approve_review_stage_marks_it_completed_and_writes_review(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     created = client.post(

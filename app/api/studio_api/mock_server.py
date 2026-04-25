@@ -8,6 +8,8 @@ from .models import (
     KeyframeFrame,
     KeyframesArtifact,
     LyricsArtifact,
+    ReelClip,
+    ReelsArtifact,
     ServerConnection,
     ServerProfile,
     StageStatus,
@@ -231,6 +233,57 @@ class MockGpuServer:
                 "Sceny są złożone w kolejności storyboardu.",
                 "Przejścia używają miękkich dissolve/fade bez gwałtownych błysków.",
                 "Manifest jest gotowy jako wejście dla renderów reels i kontroli jakości.",
+            ],
+            created_at=utc_now(),
+        )
+
+    def generate_reels(self, brief: Brief, episode: FullEpisodeArtifact | None = None) -> ReelsArtifact:
+        episode_slug = episode.episode_slug if episode else _slugify(brief.title)
+        topic = brief.topic.strip()
+        reels = [
+            ReelClip(
+                id="reel_01",
+                source_episode_slug=episode_slug,
+                source_scene_ids=["scene_01_opening", "scene_02_discovery"],
+                duration_seconds=18,
+                aspect_ratio="9:16",
+                hook=f"{topic.capitalize()} w jednym spokojnym refrenie.",
+                output_path=f"renders/{episode_slug}/reel-01.mp4",
+                caption=f"Krótka piosenka o: {topic}. Bez pośpiechu, z jasnym domknięciem.",
+                safety_note="Rolka nie zawiera presji na dalsze oglądanie ani gwałtownych błysków.",
+            ),
+            ReelClip(
+                id="reel_02",
+                source_episode_slug=episode_slug,
+                source_scene_ids=["scene_02_discovery", "scene_03_repeat"],
+                duration_seconds=20,
+                aspect_ratio="9:16",
+                hook="Mały krok, prosty rytm i powtórka, którą dziecko łatwo zapamięta.",
+                output_path=f"renders/{episode_slug}/reel-02.mp4",
+                caption="Wyciąg z edukacyjnej części odcinka, przygotowany do pionowego kadru.",
+                safety_note="Gesty są spokojne i bezpieczne do naśladowania przez dziecko.",
+            ),
+            ReelClip(
+                id="reel_03",
+                source_episode_slug=episode_slug,
+                source_scene_ids=["scene_03_repeat", "scene_04_resolution"],
+                duration_seconds=16,
+                aspect_ratio="9:16",
+                hook="Refren i miękkie zakończenie bez cliffhangera.",
+                output_path=f"renders/{episode_slug}/reel-03.mp4",
+                caption="Zamknięty fragment z refrenem, gotowy do publikacji jako short.",
+                safety_note="Zakończenie jest kompletne i nie używa manipulacyjnych zachęt.",
+            ),
+        ]
+        return ReelsArtifact(
+            title=brief.title,
+            topic=topic,
+            age_range=brief.age_range,
+            reels=reels,
+            distribution_notes=[
+                "Każda rolka ma pionowy kadr 9:16 i mieści się w limicie krótkiego formatu.",
+                "Hooki są opisowe, bez obietnic nagród za dalsze oglądanie.",
+                "Manifest może być użyty później przez adapter SSH do faktycznego renderu shortów.",
             ],
             created_at=utc_now(),
         )

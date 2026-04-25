@@ -143,6 +143,27 @@ export type FullEpisodeArtifact = {
   created_at: string;
 };
 
+export type ReelClip = {
+  id: string;
+  source_episode_slug: string;
+  source_scene_ids: string[];
+  duration_seconds: number;
+  aspect_ratio: string;
+  hook: string;
+  output_path: string;
+  caption: string;
+  safety_note: string;
+};
+
+export type ReelsArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  reels: ReelClip[];
+  distribution_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -224,6 +245,10 @@ export function fetchVideoScenesArtifact(projectId: string) {
 
 export function fetchFullEpisodeArtifact(projectId: string) {
   return request<FullEpisodeArtifact>(`/api/projects/${projectId}/artifacts/full-episode`);
+}
+
+export function fetchReelsArtifact(projectId: string) {
+  return request<ReelsArtifact>(`/api/projects/${projectId}/artifacts/reels`);
 }
 
 export function runStage(projectId: string, stage: string) {

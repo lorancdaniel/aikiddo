@@ -150,6 +150,27 @@ class FullEpisodeArtifact(BaseModel):
     created_at: str
 
 
+class ReelClip(BaseModel):
+    id: str
+    source_episode_slug: str
+    source_scene_ids: list[str]
+    duration_seconds: int
+    aspect_ratio: str
+    hook: str
+    output_path: str
+    caption: str
+    safety_note: str
+
+
+class ReelsArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    reels: list[ReelClip]
+    distribution_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING
