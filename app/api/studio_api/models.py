@@ -65,6 +65,18 @@ class Brief(BriefInput):
     )
 
 
+class LyricsArtifact(BaseModel):
+    title: str
+    topic: str
+    age_range: str
+    structure: list[str]
+    chorus: list[str]
+    verses: list[list[str]]
+    rhythm_notes: list[str]
+    safety_notes: list[str]
+    created_at: str
+
+
 class PipelineStage(BaseModel):
     stage: str
     status: StageStatus = StageStatus.PENDING

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .models import Job, Project, ServerProfile, ServerProfileInput, StageApproval, utc_now
+from .models import Job, LyricsArtifact, Project, ServerProfile, ServerProfileInput, StageApproval, utc_now
 
 
 class ProjectStorage:
@@ -47,6 +47,19 @@ class ProjectStorage:
             encoding="utf-8",
         )
         return job
+
+    def save_lyrics(self, project_id: str, lyrics: LyricsArtifact) -> LyricsArtifact:
+        (self.project_dir(project_id) / "lyrics.json").write_text(
+            json.dumps(lyrics.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return lyrics
+
+    def get_lyrics(self, project_id: str) -> LyricsArtifact | None:
+        lyrics_file = self.project_dir(project_id) / "lyrics.json"
+        if not lyrics_file.exists():
+            return None
+        return LyricsArtifact.model_validate_json(lyrics_file.read_text(encoding="utf-8"))
 
     def get_job(self, job_id: str) -> Job | None:
         matches = list(self.projects_root.glob(f"*/jobs/{job_id}.json"))

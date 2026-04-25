@@ -158,6 +158,17 @@ def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) ->
     assert lyric_stage["status"] == "needs_review"
     assert lyric_stage["job_id"] == job["id"]
 
+    lyrics_file = tmp_path / "projects" / created["id"] / "lyrics.json"
+    lyrics = json.loads(lyrics_file.read_text())
+    assert lyrics["title"] == "Kolorowy refren"
+    assert lyrics["chorus"]
+    assert lyrics["verses"]
+    assert lyrics["safety_notes"]
+
+    artifact_response = client.get(f"/api/projects/{created['id']}/artifacts/lyrics")
+    assert artifact_response.status_code == 200
+    assert artifact_response.json() == lyrics
+
 
 def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Path) -> None:
     client = make_client(tmp_path)

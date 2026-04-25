@@ -171,3 +171,20 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Require brief approval before `lyrics.generate`.
 - [x] Disable the lyrics action in the UI until the brief is completed.
 - [x] Verify the enabled/disabled transition in Playwright.
+
+### Follow-up Completed: Mock Lyrics Artifact
+
+**Files:**
+- Modify: `app/api/studio_api/models.py`
+- Modify: `app/api/studio_api/storage.py`
+- Modify: `app/api/studio_api/mock_server.py`
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/lib/api.ts`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Generate `lyrics.json` when `lyrics.generate` runs.
+- [x] Add API access to the lyrics artifact.
+- [x] Render chorus, verses, and safety notes in the cockpit.
+- [x] Verify the artifact appears in Playwright and Browser Use.

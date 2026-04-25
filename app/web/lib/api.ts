@@ -59,6 +59,18 @@ export type ServerProfile = {
 
 export type ServerProfileInput = Omit<ServerProfile, "updated_at">;
 
+export type LyricsArtifact = {
+  title: string;
+  topic: string;
+  age_range: string;
+  structure: string[];
+  chorus: string[];
+  verses: string[][];
+  rhythm_notes: string[];
+  safety_notes: string[];
+  created_at: string;
+};
+
 export type ProjectInput = {
   title: string;
   topic: string;
@@ -120,6 +132,10 @@ export function approveStage(projectId: string, stage: string, note = "") {
     method: "POST",
     body: JSON.stringify({ note })
   });
+}
+
+export function fetchLyricsArtifact(projectId: string) {
+  return request<LyricsArtifact>(`/api/projects/${projectId}/artifacts/lyrics`);
 }
 
 export function runStage(projectId: string, stage: string) {

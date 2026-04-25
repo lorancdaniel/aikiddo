@@ -9,7 +9,9 @@ import {
   approveStage,
   createProject,
   fetchProjects,
+  fetchLyricsArtifact,
   fetchServerProfile,
+  LyricsArtifact,
   Project,
   ProjectInput,
   runStage,
@@ -69,6 +71,7 @@ export default function Home() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [connection, setConnection] = useState<ServerConnection | null>(null);
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
+  const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
   const [form, setForm] = useState({
     title: "",
     topic: "",
@@ -99,7 +102,15 @@ export default function Home() {
       try {
         const [projectList, server] = await Promise.all([fetchProjects(), testServerConnection()]);
         setProjects(projectList);
-        setSelectedProject(projectList[0] ?? null);
+        const firstProject = projectList[0] ?? null;
+        setSelectedProject(firstProject);
+        if (firstProject && getStageStatus(firstProject, "lyrics.generate")) {
+          try {
+            setLyricsArtifact(await fetchLyricsArtifact(firstProject.id));
+          } catch {
+            setLyricsArtifact(null);
+          }
+        }
         setConnection(server);
         try {
           const profile = await fetchServerProfile();
@@ -190,6 +201,7 @@ export default function Home() {
       });
       setProjects((current) => [created, ...current.filter((project) => project.id !== created.id)]);
       setSelectedProject(created);
+      setLyricsArtifact(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się utworzyć projektu.");
     } finally {
@@ -205,9 +217,11 @@ export default function Home() {
 
     try {
       const job = await runStage(selectedProject.id, "lyrics.generate");
+      const lyrics = await fetchLyricsArtifact(selectedProject.id);
       const updatedProjects = await fetchProjects();
       setProjects(updatedProjects);
       setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
+      setLyricsArtifact(lyrics);
       setJobMessage(job.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
@@ -445,7 +459,14 @@ export default function Home() {
                   key={project.id}
                   className="group w-full rounded-2xl border border-white/10 bg-white/7 p-4 text-left transition hover:border-[var(--acid)] hover:bg-white/12"
                   type="button"
-                  onClick={() => setSelectedProject(project)}
+                  onClick={async () => {
+                    setSelectedProject(project);
+                    try {
+                      setLyricsArtifact(await fetchLyricsArtifact(project.id));
+                    } catch {
+                      setLyricsArtifact(null);
+                    }
+                  }}
                 >
                   <span className="block text-sm font-bold">{project.title}</span>
                   <span className="mt-1 block text-xs text-white/48">{project.brief.topic}</span>
@@ -520,22 +541,62 @@ export default function Home() {
         </article>
 
         <article className="studio-card overflow-hidden rounded-[1.4rem] md:col-span-5">
-          <div
-            className="group min-h-[360px] bg-cover bg-center p-7 transition-transform duration-700 ease-out hover:scale-[1.02]"
-            style={{
-              backgroundImage:
-                "linear-gradient(180deg, rgba(12,12,13,0.1), rgba(12,12,13,0.86)), url(https://picsum.photos/seed/animated-children-music/1000/900)"
-            }}
-          >
-            <Clapperboard className="text-[var(--acid)]" size={30} />
-            <p className="pipeline-copy mt-36 max-w-sm text-2xl font-black leading-tight">
-              {revealWords.map((word, index) => (
-                <span key={`${word}-${index}`} className="reveal-word inline-block translate-y-2 pr-1.5 opacity-20">
-                  {word}
-                </span>
-              ))}
-            </p>
-          </div>
+          {lyricsArtifact ? (
+            <div className="p-5 md:p-7" data-testid="lyrics-artifact">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-black">Podgląd tekstu</h2>
+                  <p className="mt-2 text-sm text-white/52">{lyricsArtifact.topic} · {lyricsArtifact.age_range}</p>
+                </div>
+                <Clapperboard className="text-[var(--acid)]" size={28} />
+              </div>
+              <div className="rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
+                <p className="text-xs font-black uppercase">Refren</p>
+                <div className="mt-4 space-y-2 text-lg font-black leading-snug">
+                  {lyricsArtifact.chorus.map((line) => (
+                    <p key={line}>{line}</p>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4">
+                {lyricsArtifact.verses.map((verse, index) => (
+                  <div key={`verse-${index}`} className="rounded-2xl border border-white/10 bg-white/7 p-4">
+                    <p className="text-sm font-black text-[var(--acid)]">Zwrotka {index + 1}</p>
+                    <div className="mt-3 space-y-1 text-sm leading-6 text-white/74">
+                      {verse.map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4">
+                <p className="text-sm font-black text-[var(--teal)]">Notatki bezpieczeństwa</p>
+                <ul className="mt-3 space-y-2 text-sm text-white/68">
+                  {lyricsArtifact.safety_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="group min-h-[360px] bg-cover bg-center p-7 transition-transform duration-700 ease-out hover:scale-[1.02]"
+              style={{
+                backgroundImage:
+                  "linear-gradient(180deg, rgba(12,12,13,0.1), rgba(12,12,13,0.86)), url(https://picsum.photos/seed/animated-children-music/1000/900)"
+              }}
+            >
+              <Clapperboard className="text-[var(--acid)]" size={30} />
+              <p className="pipeline-copy mt-36 max-w-sm text-2xl font-black leading-tight">
+                {revealWords.map((word, index) => (
+                  <span key={`${word}-${index}`} className="reveal-word inline-block translate-y-2 pr-1.5 opacity-20">
+                    {word}
+                  </span>
+                ))}
+              </p>
+            </div>
+          )}
         </article>
       </section>
 

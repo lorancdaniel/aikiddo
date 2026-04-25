@@ -8,6 +8,7 @@ from .mock_server import MockGpuServer
 from .models import (
     BriefInput,
     Job,
+    LyricsArtifact,
     PIPELINE_STAGES,
     Project,
     ServerProfile,
@@ -98,6 +99,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
         job = mock_server.submit_job(project_id=project_id, stage=stage)
         storage.save_job(job)
+        if stage == "lyrics.generate":
+            storage.save_lyrics(project_id, mock_server.generate_lyrics(project.brief))
         for pipeline_stage in project.pipeline:
             if pipeline_stage.stage == stage:
                 pipeline_stage.status = job.status
@@ -142,6 +145,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return job
+
+    @app.get("/api/projects/{project_id}/artifacts/lyrics", response_model=LyricsArtifact)
+    def get_lyrics_artifact(project_id: str) -> LyricsArtifact:
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        lyrics = storage.get_lyrics(project_id)
+        if lyrics is None:
+            raise HTTPException(status_code=404, detail="Lyrics artifact not found")
+        return lyrics
 
     return app
 

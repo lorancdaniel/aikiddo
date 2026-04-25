@@ -61,6 +61,8 @@ Human-gated stages can be approved through `POST /api/projects/{project_id}/stag
 
 Pipeline execution is sequential in the MVP. A stage cannot start until the immediately previous stage is `completed`; for example, `lyrics.generate` is blocked until `brief.generate` has been approved. The UI mirrors this by disabling the lyrics action until the brief gate is complete.
 
+The mock `lyrics.generate` stage creates a reviewable `lyrics.json` artifact in the project directory. The artifact includes song structure, chorus, verses, rhythm notes, and safety notes. The cockpit renders this artifact as a human-readable review panel before the operator approves the lyrics stage.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

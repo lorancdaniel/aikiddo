@@ -33,6 +33,8 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
 
   await page.getByTestId("run-lyrics-button").click();
   await expect(page.getByText("Mock job for lyrics.generate finished locally.")).toBeVisible();
+  await expect(page.getByTestId("lyrics-artifact")).toContainText("Refren");
+  await expect(page.getByTestId("lyrics-artifact")).toContainText("Mycie zębów");
   await expect(page.getByTestId("stage-lyrics.generate")).toContainText("do akceptacji");
   await page.getByTestId("approve-lyrics.generate").click();
   await expect(page.getByTestId("stage-lyrics.generate")).toContainText("gotowe");
