@@ -158,3 +158,16 @@ Open `http://localhost:3000`, inspect the UI visually, create a project, and tri
 - [x] Persist approval manifests under `projects/<project_id>/reviews/`.
 - [x] Add pipeline card approval controls in the cockpit.
 - [x] Extend e2e to approve brief and lyrics stages.
+
+### Follow-up Completed: Sequential Pipeline Guard
+
+**Files:**
+- Modify: `app/api/studio_api/main.py`
+- Modify: `app/api/tests/test_projects.py`
+- Modify: `app/web/app/page.tsx`
+- Modify: `app/web/tests/studio.spec.ts`
+
+- [x] Reject stage submission when the previous stage is not completed.
+- [x] Require brief approval before `lyrics.generate`.
+- [x] Disable the lyrics action in the UI until the brief is completed.
+- [x] Verify the enabled/disabled transition in Playwright.

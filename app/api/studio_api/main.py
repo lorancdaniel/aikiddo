@@ -86,6 +86,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
 
+        stage_index = PIPELINE_STAGES.index(stage)
+        if stage_index > 0:
+            previous_stage_name = PIPELINE_STAGES[stage_index - 1]
+            previous_stage = next(item for item in project.pipeline if item.stage == previous_stage_name)
+            if previous_stage.status != StageStatus.COMPLETED:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Previous stage {previous_stage_name} must be completed first",
+                )
+
         job = mock_server.submit_job(project_id=project_id, stage=stage)
         storage.save_job(job)
         for pipeline_stage in project.pipeline:

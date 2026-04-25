@@ -60,6 +60,10 @@ function statusClass(status: string) {
   return "bg-white/10 text-white/70";
 }
 
+function getStageStatus(project: Project | null, stage: string) {
+  return project?.pipeline.find((item) => item.stage === stage)?.status;
+}
+
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -166,6 +170,8 @@ export default function Home() {
     if (!selectedProject) return "Brak projektu";
     return `${selectedProject.brief.topic} · ${selectedProject.brief.age_range} · ${selectedProject.brief.emotional_tone}`;
   }, [selectedProject]);
+
+  const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
 
   async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -289,7 +295,7 @@ export default function Home() {
               className="inline-flex items-center gap-2 rounded-full border border-white/18 bg-white px-5 py-3 text-sm font-bold text-[var(--ink)] transition hover:scale-[1.02]"
               type="button"
               onClick={handleRunLyrics}
-              disabled={!selectedProject || isRunning}
+              disabled={!selectedProject || isRunning || !canRunLyrics}
             >
               {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Uruchom tekst
@@ -462,7 +468,7 @@ export default function Home() {
               type="button"
               data-testid="run-lyrics-button"
               onClick={handleRunLyrics}
-              disabled={!selectedProject || isRunning}
+              disabled={!selectedProject || isRunning || !canRunLyrics}
             >
               {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Uruchom tekst

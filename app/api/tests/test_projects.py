@@ -138,6 +138,8 @@ def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) ->
         },
     ).json()
 
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+
     response = client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
 
     assert response.status_code == 202
@@ -155,6 +157,26 @@ def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) ->
     lyric_stage = next(item for item in project["pipeline"] if item["stage"] == "lyrics.generate")
     assert lyric_stage["status"] == "needs_review"
     assert lyric_stage["job_id"] == job["id"]
+
+
+def test_cannot_start_stage_when_previous_review_gate_is_unapproved(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Zablokowany tekst",
+            "topic": "mycie rąk",
+            "age_range": "3-5",
+            "emotional_tone": "spokoj",
+            "educational_goal": "dziecko pamięta o myciu rąk",
+            "characters": [],
+        },
+    ).json()
+
+    response = client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Previous stage brief.generate must be completed first"
 
 
 def test_approve_review_stage_marks_it_completed_and_writes_review(tmp_path: Path) -> None:

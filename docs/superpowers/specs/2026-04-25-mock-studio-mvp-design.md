@@ -59,6 +59,8 @@ The first MVP already stores a local server profile in `projects/.studio/server-
 
 Human-gated stages can be approved through `POST /api/projects/{project_id}/stages/{stage}/approve`. Approval is allowed only while a stage is in `needs_review`; otherwise the API returns a conflict. Each approval writes a review manifest under `projects/<project_id>/reviews/<stage>.approval.json`.
 
+Pipeline execution is sequential in the MVP. A stage cannot start until the immediately previous stage is `completed`; for example, `lyrics.generate` is blocked until `brief.generate` has been approved. The UI mirrors this by disabling the lyrics action until the brief gate is complete.
+
 ## Testing
 
 Backend behavior is covered with pytest and FastAPI TestClient. The first tests verify project creation, brief persistence, mock server connection status, and mock job submission/status retrieval.

@@ -25,9 +25,11 @@ test("operator can create a project and run a mock stage", async ({ page }) => {
   await page.getByRole("button", { name: "Utwórz projekt" }).click();
 
   await expect(page.getByTestId("selected-project-title")).toContainText("Szczoteczka bohater");
+  await expect(page.getByTestId("run-lyrics-button")).toBeDisabled();
   await page.getByTestId("approve-brief.generate").click();
   await expect(page.getByTestId("stage-brief.generate")).toContainText("gotowe");
   await expect(page.getByText("Brief zatwierdzony.")).toBeVisible();
+  await expect(page.getByTestId("run-lyrics-button")).toBeEnabled();
 
   await page.getByTestId("run-lyrics-button").click();
   await expect(page.getByText("Mock job for lyrics.generate finished locally.")).toBeVisible();
