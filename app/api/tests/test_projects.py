@@ -369,13 +369,12 @@ def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypa
     assert job_detail["status"] == "queued"
     assert job_detail["phase"] == "waiting_for_worker"
     assert job_detail["queue_position"] == 1
-    assert job_detail["runner"] == {
-        "mode": "single_flight",
-        "resource": "ssh_default",
-        "state": "waiting",
-        "auto_dispatch": True,
-        "trigger": None,
-    }
+    assert job_detail["runner"]["mode"] == "single_flight"
+    assert job_detail["runner"]["resource"] == "ssh_default"
+    assert job_detail["runner"]["state"] == "waiting"
+    assert job_detail["runner"]["auto_dispatch"] is True
+    assert job_detail["runner"]["trigger"] is None
+    assert job_detail["runner"]["attempt_id"] == job["attempt_id"]
     assert job_detail["started_at"] is None
     assert not (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
@@ -448,13 +447,12 @@ def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -
     assert result["previous_status"] == "queued"
     assert result["new_status"] == "needs_review"
     assert result["queue_position"] == 0
-    assert result["runner"] == {
-        "mode": "single_flight",
-        "resource": "ssh_default",
-        "state": "released",
-        "auto_dispatch": True,
-        "trigger": "manual",
-    }
+    assert result["runner"]["mode"] == "single_flight"
+    assert result["runner"]["resource"] == "ssh_default"
+    assert result["runner"]["state"] == "released"
+    assert result["runner"]["auto_dispatch"] is True
+    assert result["runner"]["trigger"] == "manual"
+    assert result["runner"]["attempt_id"] == queued_job["attempt_id"]
     dispatched_detail = client.get(f"/api/jobs/{queued_job['id']}").json()
     assert dispatched_detail["status"] == "succeeded"
     assert dispatched_detail["phase"] == "awaiting_review"
@@ -579,6 +577,146 @@ def test_submit_job_auto_drains_existing_ssh_queue_before_new_job(tmp_path: Path
     assert (tmp_path / "projects" / newer_project["id"] / "remote-runs" / f"{newer_job['id']}.json").exists()
 
 
+def test_expired_ssh_lock_fails_stale_job_and_allows_next_dispatch(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    series = create_minimal_series(client)
+    stale_project = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="Stale lock song",
+        topic="colors",
+        objective="child repeats color words",
+        vocabulary=["red", "blue"],
+    )
+    client.post(f"/api/projects/{stale_project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    lock_file = locks_dir / "ssh_default.json"
+    lock_file.write_text(
+        json.dumps(
+            {
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    job_projects: dict[str, str] = {}
+    run_order: list[str] = []
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if input and "<<'JSON'\n" in input:
+            manifest_text = input.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0]
+            manifest = json.loads(manifest_text)
+            job_projects[manifest["job_id"]] = manifest["project_id"]
+            run_order.append(manifest["job_id"])
+            return Completed(stdout="remote script completed\n")
+        if command[-1].startswith("cat ") and command[-1].endswith("output_manifest.json"):
+            job_id = command[-1].split("/jobs/", 1)[1].split("/", 1)[0]
+            return Completed(stdout=json.dumps(remote_output_fixture(job_projects[job_id])))
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    stale_job = client.post(f"/api/projects/{stale_project['id']}/jobs/lyrics.generate").json()
+    assert stale_job["status"] == "queued"
+    lock_file.write_text(
+        json.dumps(
+            {
+                "lock_id": "lock_stale_test",
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": stale_job["id"],
+                "attempt_id": stale_job["attempt_id"],
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    heartbeat = client.post(
+        "/api/jobs/locks/heartbeat",
+        json={
+            "adapter": "ssh",
+            "resource_key": "ssh_default",
+            "job_id": stale_job["id"],
+            "lock_id": "lock_stale_test",
+            "attempt_id": stale_job["attempt_id"],
+        },
+    ).json()
+    assert heartbeat["status"] == "renewed"
+    assert heartbeat["heartbeat_at"] is not None
+    assert heartbeat["lease_expires_at"] is not None
+    lock_file.write_text(
+        json.dumps(
+            {
+                "lock_id": "lock_stale_test",
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": stale_job["id"],
+                "attempt_id": stale_job["attempt_id"],
+                "acquired_at": "2000-01-01T00:00:00+00:00",
+                "heartbeat_at": "2000-01-01T00:00:00+00:00",
+                "lease_expires_at": "2000-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    next_project = create_project_with_episode_spec(
+        client,
+        series_id=series["id"],
+        title="After stale lock song",
+        topic="shapes",
+        objective="child repeats shape words",
+        vocabulary=["circle", "square"],
+    )
+    client.post(f"/api/projects/{next_project['id']}/stages/brief.generate/approve", json={})
+    next_job = client.post(f"/api/projects/{next_project['id']}/jobs/lyrics.generate").json()
+
+    stale_detail = client.get(f"/api/jobs/{stale_job['id']}").json()
+    next_detail = client.get(f"/api/jobs/{next_job['id']}").json()
+    stale_events = client.get(f"/api/jobs/{stale_job['id']}/events").json()
+    queue_status = client.get("/api/queue/ssh-default").json()
+
+    assert run_order == [next_job["id"]]
+    assert stale_detail["status"] == "failed"
+    assert stale_detail["phase"] == "failed"
+    assert stale_detail["error"]["code"] == "runner_failed"
+    assert "lease expired" in stale_detail["error"]["message"]
+    assert [event["event"] for event in stale_events] == ["queued", "lock_heartbeat", "stale_lock_recovered"]
+    assert next_detail["status"] == "succeeded"
+    assert next_detail["phase"] == "awaiting_review"
+    assert queue_status["queued_count"] == 0
+    assert queue_status["current_job_id"] is None
+    assert not lock_file.exists()
+
+
 def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     client.put(
@@ -683,13 +821,12 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     assert job_detail["log_url"].endswith(f"/jobs/{job['id']}/log")
     assert job_detail["error"] is None
     assert job_detail["queue_position"] == 0
-    assert job_detail["runner"] == {
-        "mode": "single_flight",
-        "resource": "ssh_default",
-        "state": "released",
-        "auto_dispatch": True,
-        "trigger": None,
-    }
+    assert job_detail["runner"]["mode"] == "single_flight"
+    assert job_detail["runner"]["resource"] == "ssh_default"
+    assert job_detail["runner"]["state"] == "released"
+    assert job_detail["runner"]["auto_dispatch"] is True
+    assert job_detail["runner"]["trigger"] is None
+    assert job_detail["runner"]["attempt_id"] == job["attempt_id"]
     assert job_detail["started_at"] == job_detail["created_at"]
     assert job_detail["finished_at"] == job_detail["updated_at"]
 

@@ -25,6 +25,8 @@ from .models import (
     Job,
     JobEvent,
     KeyframesArtifact,
+    LockHeartbeatInput,
+    LockHeartbeatResult,
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
@@ -44,6 +46,8 @@ from .models import (
     StageApprovalInput,
     StageCatalogItem,
     StageStatus,
+    StaleLockRecoveryInput,
+    StaleLockRecoveryResult,
     StoryboardArtifact,
     VideoScenesArtifact,
     WorkerQueueStatus,
@@ -172,7 +176,36 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                 return index
         return 0
 
-    def execute_locked_ssh_job(job: Job, project: Project, profile: ServerProfile) -> Job:
+    def recover_stale_worker_lock(resource_key: str) -> StaleLockRecoveryResult:
+        lock = storage.get_worker_lock_raw(resource_key)
+        if lock is None or not storage.is_worker_lock_expired(lock):
+            return StaleLockRecoveryResult(status="idle", reason="no_lock_or_not_stale")
+
+        locked_job = storage.get_job(lock.job_id)
+        previous_status = locked_job.status.value if locked_job is not None else None
+        if locked_job is not None and locked_job.status in {StageStatus.QUEUED, StageStatus.RUNNING}:
+            locked_job.status = StageStatus.FAILED
+            locked_job.message = "SSH worker lease expired; stale lock was recovered."
+            locked_job.failure_reason = "stale_lock_recovered"
+            locked_job.updated_at = utc_now()
+            storage.save_job(locked_job)
+            storage.append_job_event(locked_job, "stale_lock_recovered", locked_job.message)
+            locked_project = storage.get_project(locked_job.project_id)
+            if locked_project is not None:
+                set_pipeline_stage(locked_project, locked_job.stage, locked_job)
+                storage.save_project(locked_project)
+
+        storage.delete_worker_lock(resource_key)
+        return StaleLockRecoveryResult(
+            status="recovered",
+            recovered_job_id=lock.job_id,
+            previous_status=previous_status,
+            new_status=StageStatus.FAILED.value if locked_job is not None else None,
+            failure_reason="stale_lock_recovered",
+            released_lock_id=lock.lock_id,
+        )
+
+    def execute_locked_ssh_job(job: Job, project: Project, profile: ServerProfile, lock_id: str) -> Job:
         job.status = StageStatus.RUNNING
         job.message = "SSH worker acquired; generating server artifacts."
         job.updated_at = utc_now()
@@ -182,6 +215,10 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         storage.save_project(project)
         try:
             remote_run = ssh_server.run_remote_pilot(project_id=job.project_id, brief=project.brief, stage=job.stage, profile=profile, job_id=job.id)
+            current_lock = storage.get_worker_lock_raw(SSH_WORKER_RESOURCE)
+            if current_lock is None or current_lock.job_id != job.id or current_lock.lock_id != lock_id or current_lock.attempt_id != job.attempt_id:
+                storage.append_job_event(job, "late_worker_completion_ignored", "Worker completion ignored because the lock owner no longer matches.")
+                return storage.get_job(job.id) or job
             storage.save_remote_pilot_run(job.project_id, remote_run)
             storage.append_job_event(job, "artifact_saved", "Server output manifest and artifacts were recorded.")
             job.status = StageStatus.FAILED if remote_run.status == "failed" else StageStatus.NEEDS_REVIEW if job.stage in HUMAN_REVIEW_STAGES else StageStatus.COMPLETED
@@ -200,6 +237,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         return job
 
     def dispatch_next_ssh_job(trigger: str = "manual", drain_remaining: bool = False, depth: int = 0) -> DispatchNextResult:
+        recover_stale_worker_lock(SSH_WORKER_RESOURCE)
         profile = storage.get_server_profile()
         if profile is None or profile.mode != "ssh":
             return DispatchNextResult(status="idle", reason="ssh_profile_required")
@@ -209,14 +247,14 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         project = storage.get_project(queued_job.project_id)
         if project is None:
             return DispatchNextResult(status="idle", reason="project_not_found")
-        lock = storage.acquire_worker_lock(SSH_WORKER_RESOURCE, queued_job.id)
+        lock = storage.acquire_worker_lock(SSH_WORKER_RESOURCE, queued_job.id, queued_job.attempt_id)
         if lock is None:
             return DispatchNextResult(status="idle", reason="no_queued_jobs_or_lock_busy")
 
         previous_status = queued_job.status.value
         storage.append_job_event(queued_job, "lock_acquired", f"Worker lock acquired by {trigger} dispatch.")
         try:
-            dispatched_job = execute_locked_ssh_job(queued_job, project, profile)
+            dispatched_job = execute_locked_ssh_job(queued_job, project, profile, lock.lock_id)
         finally:
             storage.release_worker_lock(SSH_WORKER_RESOURCE, queued_job.id)
             storage.append_job_event(queued_job, "lock_released", "Worker lock released.")
@@ -231,7 +269,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             previous_status=previous_status,
             new_status=dispatched_job.status.value,
             queue_position=queue_position_for(dispatched_job),
-            runner=GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released", trigger=trigger),
+            runner=GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released", trigger=trigger, attempt_id=dispatched_job.attempt_id),
         )
 
     app = FastAPI(title="AI Kids Music Studio API", version="0.1.0")
@@ -495,6 +533,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                 status=StageStatus.QUEUED,
                 adapter="ssh",
                 message="Waiting for SSH worker slot.",
+                attempt_id=f"attempt_{uuid4().hex[:12]}",
                 created_at=utc_now(),
                 updated_at=utc_now(),
             )
@@ -544,8 +583,36 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             return DispatchNextResult(status="idle", reason="unsupported_resource")
         return dispatch_next_ssh_job(trigger="manual", drain_remaining=True)
 
+    @app.post("/api/jobs/locks/heartbeat", response_model=LockHeartbeatResult)
+    def heartbeat_worker_lock(heartbeat_input: LockHeartbeatInput) -> LockHeartbeatResult:
+        if heartbeat_input.adapter != "ssh" or heartbeat_input.resource_key != SSH_WORKER_RESOURCE:
+            return LockHeartbeatResult(status="rejected", reason="unsupported_resource")
+        recover_stale_worker_lock(SSH_WORKER_RESOURCE)
+        lock = storage.heartbeat_worker_lock(
+            heartbeat_input.resource_key,
+            heartbeat_input.job_id,
+            heartbeat_input.lock_id,
+            heartbeat_input.attempt_id,
+        )
+        if lock is None:
+            return LockHeartbeatResult(status="rejected", reason="lock_owner_mismatch")
+        job = storage.get_job(heartbeat_input.job_id)
+        if job is not None:
+            storage.append_job_event(job, "lock_heartbeat", "SSH worker lease renewed.")
+        return LockHeartbeatResult(status="renewed", heartbeat_at=lock.heartbeat_at, lease_expires_at=lock.lease_expires_at)
+
+    @app.post("/api/jobs/locks/recover-stale", response_model=StaleLockRecoveryResult)
+    def recover_stale_lock(recovery_input: StaleLockRecoveryInput) -> StaleLockRecoveryResult:
+        if recovery_input.adapter != "ssh" or recovery_input.resource_key != SSH_WORKER_RESOURCE:
+            return StaleLockRecoveryResult(status="idle", reason="unsupported_resource")
+        result = recover_stale_worker_lock(recovery_input.resource_key)
+        if result.status == "recovered":
+            result.dispatched_next = dispatch_next_ssh_job(trigger="auto_drain", drain_remaining=True)
+        return result
+
     @app.get("/api/queue/ssh-default", response_model=WorkerQueueStatus)
     def get_ssh_queue_status() -> WorkerQueueStatus:
+        recover_stale_worker_lock(SSH_WORKER_RESOURCE)
         queued_jobs = storage.list_queued_ssh_jobs()
         lock = storage.get_worker_lock(SSH_WORKER_RESOURCE)
         return WorkerQueueStatus(
@@ -649,14 +716,23 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         queue_position = queue_position_for(job)
         runner = None
         if job.adapter == "ssh":
+            lock = storage.get_worker_lock_raw(SSH_WORKER_RESOURCE)
             if job.status == StageStatus.QUEUED:
                 phase = "waiting_for_worker"
-                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="waiting")
+                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="waiting", attempt_id=job.attempt_id)
             elif job.status == StageStatus.RUNNING:
                 phase = "generating_artifact"
-                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="acquired")
+                runner = GenerationRunnerState(
+                    mode="single_flight",
+                    resource=SSH_WORKER_RESOURCE,
+                    state="acquired",
+                    lock_id=lock.lock_id if lock and lock.job_id == job.id else None,
+                    attempt_id=job.attempt_id,
+                    heartbeat_at=lock.heartbeat_at if lock and lock.job_id == job.id else None,
+                    lease_expires_at=lock.lease_expires_at if lock and lock.job_id == job.id else None,
+                )
             else:
-                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released")
+                runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released", attempt_id=job.attempt_id)
         run = storage.get_remote_pilot_run(job.project_id, job.id) if job.adapter == "ssh" else None
         artifacts = [
             GenerationArtifactView(
@@ -680,6 +756,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             artifacts=artifacts,
             log_url=f"/api/projects/{job.project_id}/jobs/{job.id}/log" if run is not None else None,
             error=error,
+            attempt_id=job.attempt_id,
+            failure_reason=job.failure_reason,
             queue_position=queue_position,
             runner=runner,
             created_at=job.created_at,

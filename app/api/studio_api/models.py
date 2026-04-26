@@ -456,6 +456,8 @@ class Job(BaseModel):
     status: StageStatus
     adapter: Literal["mock", "ssh"]
     message: str
+    attempt_id: str | None = None
+    failure_reason: str | None = None
     created_at: str
     updated_at: str
 
@@ -513,6 +515,10 @@ class GenerationRunnerState(BaseModel):
     state: Literal["waiting", "acquired", "released"]
     auto_dispatch: bool = True
     trigger: Literal["manual", "auto_drain"] | None = None
+    lock_id: str | None = None
+    attempt_id: str | None = None
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
 
 
 class JobEvent(BaseModel):
@@ -551,6 +557,8 @@ class GenerationJobDetail(BaseModel):
     artifacts: list[GenerationArtifactView] = Field(default_factory=list)
     log_url: str | None = None
     error: dict | None = None
+    attempt_id: str | None = None
+    failure_reason: str | None = None
     queue_position: int = 0
     runner: GenerationRunnerState | None = None
     created_at: str
@@ -560,12 +568,45 @@ class GenerationJobDetail(BaseModel):
 
 
 class WorkerLock(BaseModel):
+    lock_id: str = Field(default_factory=lambda: f"lock_{uuid4().hex[:12]}")
     resource_key: str
     adapter: Literal["ssh"]
     job_id: str
+    attempt_id: str | None = None
     acquired_at: str
     heartbeat_at: str
     lease_expires_at: str
+
+
+class LockHeartbeatInput(BaseModel):
+    adapter: Literal["ssh"] = "ssh"
+    resource_key: str = "ssh_default"
+    job_id: str
+    lock_id: str
+    attempt_id: str | None = None
+
+
+class LockHeartbeatResult(BaseModel):
+    status: Literal["renewed", "rejected"]
+    reason: str | None = None
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+
+
+class StaleLockRecoveryInput(BaseModel):
+    adapter: Literal["ssh"] = "ssh"
+    resource_key: str = "ssh_default"
+
+
+class StaleLockRecoveryResult(BaseModel):
+    status: Literal["recovered", "idle"]
+    reason: str | None = None
+    recovered_job_id: str | None = None
+    previous_status: str | None = None
+    new_status: str | None = None
+    failure_reason: str | None = None
+    released_lock_id: str | None = None
+    dispatched_next: DispatchNextResult | None = None
 
 
 class WorkerQueueStatus(BaseModel):

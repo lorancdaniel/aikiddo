@@ -338,16 +338,26 @@ class ProjectStorage:
         return self.worker_locks_dir() / f"{resource_key}.json"
 
     def get_worker_lock(self, resource_key: str) -> WorkerLock | None:
-        lock_file = self.worker_lock_file(resource_key)
-        if not lock_file.exists():
+        lock = self.get_worker_lock_raw(resource_key)
+        if lock is None:
             return None
-        lock = WorkerLock.model_validate_json(lock_file.read_text(encoding="utf-8"))
         if parse_utc(lock.lease_expires_at) <= datetime.now(timezone.utc):
-            lock_file.unlink(missing_ok=True)
             return None
         return lock
 
-    def acquire_worker_lock(self, resource_key: str, job_id: str, lease_seconds: int = 900) -> WorkerLock | None:
+    def get_worker_lock_raw(self, resource_key: str) -> WorkerLock | None:
+        lock_file = self.worker_lock_file(resource_key)
+        if not lock_file.exists():
+            return None
+        return WorkerLock.model_validate_json(lock_file.read_text(encoding="utf-8"))
+
+    def is_worker_lock_expired(self, lock: WorkerLock) -> bool:
+        return parse_utc(lock.lease_expires_at) <= datetime.now(timezone.utc)
+
+    def delete_worker_lock(self, resource_key: str) -> None:
+        self.worker_lock_file(resource_key).unlink(missing_ok=True)
+
+    def acquire_worker_lock(self, resource_key: str, job_id: str, attempt_id: str | None = None, lease_seconds: int = 900) -> WorkerLock | None:
         existing = self.get_worker_lock(resource_key)
         if existing is not None:
             return None
@@ -357,6 +367,7 @@ class ProjectStorage:
             resource_key=resource_key,
             adapter="ssh",
             job_id=job_id,
+            attempt_id=attempt_id,
             acquired_at=now,
             heartbeat_at=now,
             lease_expires_at=(now_dt + timedelta(seconds=lease_seconds)).isoformat(),
@@ -367,6 +378,28 @@ class ProjectStorage:
                 handle.write(json.dumps(lock.model_dump(mode="json"), ensure_ascii=False, indent=2))
         except FileExistsError:
             return None
+        return lock
+
+    def heartbeat_worker_lock(
+        self,
+        resource_key: str,
+        job_id: str,
+        lock_id: str,
+        attempt_id: str | None,
+        lease_seconds: int = 900,
+    ) -> WorkerLock | None:
+        lock = self.get_worker_lock(resource_key)
+        if lock is None:
+            return None
+        if lock.job_id != job_id or lock.lock_id != lock_id or lock.attempt_id != attempt_id:
+            return None
+        now_dt = datetime.now(timezone.utc)
+        lock.heartbeat_at = now_dt.isoformat()
+        lock.lease_expires_at = (now_dt + timedelta(seconds=lease_seconds)).isoformat()
+        self.worker_lock_file(resource_key).write_text(
+            json.dumps(lock.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return lock
 
     def release_worker_lock(self, resource_key: str, job_id: str) -> None:

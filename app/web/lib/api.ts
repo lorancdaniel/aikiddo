@@ -231,6 +231,8 @@ export type GenerationJobDetail = {
   artifacts: GenerationArtifactView[];
   log_url: string | null;
   error: { code: string; message: string } | null;
+  attempt_id: string | null;
+  failure_reason: string | null;
   queue_position: number;
   runner: {
     mode: "single_flight";
@@ -238,6 +240,10 @@ export type GenerationJobDetail = {
     state: "waiting" | "acquired" | "released";
     auto_dispatch: boolean;
     trigger: "manual" | "auto_drain" | null;
+    lock_id: string | null;
+    attempt_id: string | null;
+    heartbeat_at: string | null;
+    lease_expires_at: string | null;
   } | null;
   created_at: string;
   started_at: string | null;
@@ -260,15 +266,39 @@ export type WorkerQueueStatus = {
   queued_count: number;
   queued_job_ids: string[];
   current_lock: {
+    lock_id: string;
     resource_key: string;
     adapter: "ssh";
     job_id: string;
+    attempt_id: string | null;
     acquired_at: string;
     heartbeat_at: string;
     lease_expires_at: string;
   } | null;
   current_job_id: string | null;
   oldest_queued_job_id: string | null;
+};
+
+export type LockHeartbeatResult = {
+  status: "renewed" | "rejected";
+  reason: string | null;
+  heartbeat_at: string | null;
+  lease_expires_at: string | null;
+};
+
+export type StaleLockRecoveryResult = {
+  status: "recovered" | "idle";
+  reason: string | null;
+  recovered_job_id: string | null;
+  previous_status: string | null;
+  new_status: string | null;
+  failure_reason: string | null;
+  released_lock_id: string | null;
+  dispatched_next: {
+    status: "dispatched" | "idle";
+    reason: string | null;
+    job_id: string | null;
+  } | null;
 };
 
 export type RemotePilotRun = {
@@ -581,6 +611,20 @@ export function fetchJobEvents(jobId: string, after = 0) {
 
 export function fetchSshQueueStatus() {
   return request<WorkerQueueStatus>("/api/queue/ssh-default");
+}
+
+export function heartbeatJobLock(input: { job_id: string; lock_id: string; attempt_id: string | null; resource_key?: string }) {
+  return request<LockHeartbeatResult>("/api/jobs/locks/heartbeat", {
+    method: "POST",
+    body: JSON.stringify({ adapter: "ssh", resource_key: input.resource_key ?? "ssh_default", job_id: input.job_id, lock_id: input.lock_id, attempt_id: input.attempt_id })
+  });
+}
+
+export function recoverStaleJobLock(resource_key = "ssh_default") {
+  return request<StaleLockRecoveryResult>("/api/jobs/locks/recover-stale", {
+    method: "POST",
+    body: JSON.stringify({ adapter: "ssh", resource_key })
+  });
 }
 
 export function fetchJobArtifacts(projectId: string, jobId: string) {
