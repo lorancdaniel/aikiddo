@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -150,6 +152,71 @@ def remote_output_fixture(project_id: str, stage: str = "lyrics.generate") -> di
         "logs": ["fixture completed"],
         "generated_at": "2026-04-25T20:00:00+00:00",
     }
+
+
+def extract_job_manifest_from_ssh_script(script: str) -> dict:
+    legacy_marker = "<<'JSON'\n"
+    if legacy_marker in script:
+        manifest_text = script.split(legacy_marker, 1)[1].split("\nJSON", 1)[0]
+        return json.loads(manifest_text)
+    marker = '(job_dir / "job_manifest.json").write_text('
+    encoded_manifest = script.split(marker, 1)[1].split(', encoding="utf-8")', 1)[0]
+    return json.loads(json.loads(encoded_manifest))
+
+
+def test_aikiddo_worker_writes_server_output_contract(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    manifest = {
+        "schema_version": "job.v1",
+        "job_id": "remote_worker_contract",
+        "project_id": "project_contract",
+        "stage": "lyrics.generate",
+        "job_type": "kids_song_pilot",
+        "adapter": "ssh",
+        "brief": {
+            "id": "brief_contract",
+            "title": "Colors Song",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+            "forbidden_motifs": [],
+            "created_at": "2026-04-26T00:00:00+00:00",
+        },
+        "created_at": "2026-04-26T00:00:00+00:00",
+    }
+    (job_dir / "job_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
+    result = subprocess.run(
+        [sys.executable, str(worker_path), str(job_dir)],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    output = json.loads((job_dir / "output_manifest.json").read_text(encoding="utf-8"))
+    assert output["schema_version"] == "output.v1"
+    assert output["job_id"] == "remote_worker_contract"
+    assert output["project_id"] == "project_contract"
+    assert output["status"] == "completed"
+    assert output["adapter"] == "ssh"
+    assert output["storage_policy"] == "server"
+    assert [artifact["artifact_id"] for artifact in output["artifacts"]] == [
+        "lyrics_txt",
+        "song_plan_json",
+        "safety_notes_json",
+        "audio_preview_wav",
+    ]
+    assert (job_dir / "lyrics.txt").exists()
+    assert (job_dir / "song_plan.json").exists()
+    assert (job_dir / "safety_notes.json").exists()
+    assert (job_dir / "audio_preview.wav").exists()
+    assert "runner=aikiddo_worker.py" in (job_dir / "worker.log").read_text(encoding="utf-8")
 
 
 def test_health_reports_mock_adapter(tmp_path: Path) -> None:
@@ -657,9 +724,8 @@ def test_submit_job_auto_drains_existing_ssh_queue_before_new_job(tmp_path: Path
             self.stderr = ""
 
     def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
-        if input and "<<'JSON'\n" in input:
-            manifest_text = input.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0]
-            manifest = json.loads(manifest_text)
+        if input and "job_manifest.json" in input:
+            manifest = extract_job_manifest_from_ssh_script(input)
             job_projects[manifest["job_id"]] = manifest["project_id"]
             run_order.append(manifest["job_id"])
             return Completed(stdout="remote script completed\n")
@@ -771,9 +837,8 @@ def test_expired_ssh_lock_fails_stale_job_and_allows_next_dispatch(tmp_path: Pat
             self.stderr = ""
 
     def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
-        if input and "<<'JSON'\n" in input:
-            manifest_text = input.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0]
-            manifest = json.loads(manifest_text)
+        if input and "job_manifest.json" in input:
+            manifest = extract_job_manifest_from_ssh_script(input)
             job_projects[manifest["job_id"]] = manifest["project_id"]
             run_order.append(manifest["job_id"])
             return Completed(stdout="remote script completed\n")

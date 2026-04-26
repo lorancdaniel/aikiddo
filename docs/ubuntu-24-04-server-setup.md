@@ -11,6 +11,8 @@ Target server seen from the Mac:
 
 The app now runs server-owned SSH generation. The old mock path is still present only as a local fallback; production-style operation should use the SSH server profile and server-side artifacts.
 
+SSH generation now uses the versioned worker script at `scripts/aikiddo_worker.py`. The FastAPI adapter sends that script and `job_manifest.json` to the server job directory, then the server writes `output_manifest.json`, `worker.log`, and all artifacts under `<remote_root>/jobs/<job_id>/`.
+
 ## 1. Add Mac SSH Key To The Server
 
 Run this on the Ubuntu server as the user that should accept SSH logins.
@@ -132,6 +134,13 @@ If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
 Do not use the old `/api/projects/{project_id}/remote-pilot` path for production work. It is retired and returns `410 Gone`; the app should create generation work through `POST /api/projects/{project_id}/jobs/{stage}` and read progress through job detail, events, logs, and artifacts.
 
+The current server worker is:
+
+- source-controlled at `scripts/aikiddo_worker.py`;
+- copied into each remote job directory as `aikiddo_worker.py`;
+- invoked as `python3 "$job_dir/aikiddo_worker.py" "$job_dir"`;
+- responsible for producing `output_manifest.json` and `worker.log`.
+
 Frontend:
 
 ```bash
@@ -184,7 +193,8 @@ Stack:
 - Backend: app/api, FastAPI, port 8000
 - Frontend: app/web, Next.js, port 3010
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
-- Next product modules: Publish Package v2, then Manual Performance Ledger.
+- Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json and writes output_manifest.json plus server artifacts.
+- Next product modules: replace the lightweight worker internals with real lyrics/audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
 1. Inspect the repo and current git status.

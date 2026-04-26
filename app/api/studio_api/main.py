@@ -237,7 +237,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         set_pipeline_stage(project, job.stage, job)
         storage.save_project(project)
         try:
-            remote_run = ssh_server.run_remote_pilot(project_id=job.project_id, brief=project.brief, stage=job.stage, profile=profile, job_id=job.id)
+            remote_run = ssh_server.run_remote_job(project_id=job.project_id, brief=project.brief, stage=job.stage, profile=profile, job_id=job.id)
             current_lock = storage.get_worker_lock_raw(SSH_WORKER_RESOURCE)
             if current_lock is None or current_lock.job_id != job.id or current_lock.lock_id != lock_id or current_lock.attempt_id != job.attempt_id:
                 storage.append_job_event(job, "late_worker_completion_ignored", "Worker completion ignored because the lock owner no longer matches.")

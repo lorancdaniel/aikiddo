@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 import shlex
 import subprocess
 from uuid import uuid4
@@ -9,6 +10,10 @@ from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun
 
 class SshGenerationServer:
     adapter = "ssh"
+
+    def _worker_script_source(self) -> str:
+        repo_root = Path(__file__).resolve().parents[3]
+        return (repo_root / "scripts" / "aikiddo_worker.py").read_text(encoding="utf-8")
 
     def _ssh_base_command(self, profile: ServerProfile) -> list[str]:
         command = ["ssh", "-o", "BatchMode=yes", "-p", str(profile.port)]
@@ -30,7 +35,7 @@ class SshGenerationServer:
             return ServerConnection(mode="ssh", reachable=False, message=message)
         return ServerConnection(mode="ssh", reachable=True, message=result.stdout.strip())
 
-    def run_remote_pilot(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile, job_id: str | None = None) -> RemotePilotRun:
+    def run_remote_job(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile, job_id: str | None = None) -> RemotePilotRun:
         now = utc_now()
         job_id = job_id or f"remote_{uuid4().hex[:12]}"
         remote_job_dir = f"{profile.remote_root.rstrip('/')}/jobs/{job_id}"
@@ -57,145 +62,20 @@ class SshGenerationServer:
             "created_at": now,
         }
         manifest_json = json.dumps(job_manifest, ensure_ascii=False, indent=2)
+        worker_source = self._worker_script_source()
         remote_script = f"""set -euo pipefail
 job_dir={shlex.quote(remote_job_dir)}
-mkdir -p "$job_dir"
-cat > "$job_dir/job_manifest.json" <<'JSON'
-{manifest_json}
-JSON
 python3 - "$job_dir" <<'PY'
 import json
-import hashlib
-import math
 import pathlib
-import socket
-import struct
 import sys
-import wave
-from datetime import datetime, timezone
 
 job_dir = pathlib.Path(sys.argv[1])
-manifest = json.loads((job_dir / "job_manifest.json").read_text(encoding="utf-8"))
-brief = manifest["brief"]
-
-lyrics = "\\n".join([
-    brief["title"],
-    "",
-    "[Verse]",
-    "We name it slowly, then we sing it clear,",
-    "Small bright words that little voices hear.",
-    "",
-    "[Chorus]",
-    brief["topic"].capitalize() + " in the rhythm, one more time,",
-    "Clap it, say it, keep it kind.",
-]) + "\\n"
-song_plan = {{
-    "title": brief["title"],
-    "topic": brief["topic"],
-    "age_range": brief["age_range"],
-    "stage": manifest["stage"],
-    "duration_target_sec": 60,
-    "sections": ["verse", "chorus"],
-    "storage_policy": "server",
-}}
-safety_notes = {{
-    "status": "ready_for_human_review",
-    "checks": [
-        "age range is explicit",
-        "educational topic is explicit",
-        "no direct publishing without human approval",
-    ],
-    "host": socket.gethostname(),
-}}
-sample_rate = 22050
-duration_sec = 2.0
-base_frequency = 330 + (len(brief["topic"]) % 8) * 22
-audio_path = job_dir / "audio_preview.wav"
-with wave.open(str(audio_path), "wb") as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(sample_rate)
-    frames = []
-    for index in range(int(sample_rate * duration_sec)):
-        envelope = min(index / 1200, 1.0) * min((sample_rate * duration_sec - index) / 1200, 1.0)
-        sample = int(18000 * envelope * math.sin(2 * math.pi * base_frequency * index / sample_rate))
-        frames.append(struct.pack("<h", sample))
-    wav.writeframes(b"".join(frames))
-
-preview = {{
-    "title": brief["title"],
-    "lyrics": lyrics,
-    "song_plan": {{**song_plan, "audio_preview": "audio_preview.wav"}},
-    "safety_notes": safety_notes["checks"],
-}}
-files = [
-    ("lyrics_txt", "lyrics", "lyrics.txt", "text/plain", lyrics),
-    ("song_plan_json", "song_plan", "song_plan.json", "application/json", json.dumps(song_plan, ensure_ascii=False, indent=2) + "\\n"),
-    ("safety_notes_json", "safety_notes", "safety_notes.json", "application/json", json.dumps(safety_notes, ensure_ascii=False, indent=2) + "\\n"),
-]
-artifacts = []
-for artifact_id, artifact_type, filename, mime_type, content in files:
-    path = job_dir / filename
-    path.write_text(content, encoding="utf-8")
-    payload = path.read_bytes()
-    artifacts.append({{
-        "artifact_id": artifact_id,
-        "type": artifact_type,
-        "filename": filename,
-        "mime_type": mime_type,
-        "size_bytes": len(payload),
-        "sha256": hashlib.sha256(payload).hexdigest(),
-        "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/" + filename,
-        "public": False,
-    }})
-audio_payload = audio_path.read_bytes()
-artifacts.append({{
-    "artifact_id": "audio_preview_wav",
-    "type": "audio_preview",
-    "filename": "audio_preview.wav",
-    "mime_type": "audio/wav",
-    "size_bytes": len(audio_payload),
-    "sha256": hashlib.sha256(audio_payload).hexdigest(),
-    "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/audio_preview.wav",
-    "public": False,
-}})
-worker_log = job_dir / "worker.log"
-worker_log.write_text(
-    "\\n".join([
-        "job=" + manifest["job_id"],
-        "stage=" + manifest["stage"],
-        "artifacts=lyrics.txt,song_plan.json,safety_notes.json,audio_preview.wav",
-        "storage=server",
-    ]) + "\\n",
-    encoding="utf-8",
-)
-output = {{
-    "schema_version": "output.v1",
-    "job_id": manifest["job_id"],
-    "project_id": manifest["project_id"],
-    "stage": manifest["stage"],
-    "status": "completed",
-    "adapter": "ssh",
-    "storage_policy": "server",
-    "remote_job_dir": str(job_dir),
-    "output_files": [artifact["storage_key"] for artifact in artifacts],
-    "artifacts": artifacts,
-    "preview": preview,
-    "logs": [
-        "remote worker wrote job_manifest.json",
-        "remote worker wrote lyrics.txt",
-        "remote worker wrote song_plan.json",
-        "remote worker wrote safety_notes.json",
-        "remote worker wrote audio_preview.wav",
-    ],
-    "log": {{
-        "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/worker.log",
-    }},
-    "generated_at": datetime.now(timezone.utc).isoformat(),
-}}
-(job_dir / "output_manifest.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-print(json.dumps(output, ensure_ascii=False))
+job_dir.mkdir(parents=True, exist_ok=True)
+(job_dir / "job_manifest.json").write_text({json.dumps(manifest_json)}, encoding="utf-8")
+(job_dir / "aikiddo_worker.py").write_text({json.dumps(worker_source)}, encoding="utf-8")
 PY
+python3 "$job_dir/aikiddo_worker.py" "$job_dir"
 """
         script_result = subprocess.run(
             [*self._ssh_base_command(profile), "bash", "-s"],
@@ -218,7 +98,7 @@ PY
                 output_files=[],
                 artifacts=[],
                 preview=None,
-                message=script_result.stderr.strip() or "Remote pilot failed",
+                message=script_result.stderr.strip() or "Server worker failed",
                 logs=[line for line in [script_result.stdout.strip(), script_result.stderr.strip()] if line],
                 created_at=now,
                 updated_at=utc_now(),
@@ -249,6 +129,9 @@ PY
             created_at=now,
             updated_at=utc_now(),
         )
+
+    def run_remote_pilot(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile, job_id: str | None = None) -> RemotePilotRun:
+        return self.run_remote_job(project_id=project_id, brief=brief, stage=stage, profile=profile, job_id=job_id)
 
     def fetch_artifact(self, profile: ServerProfile, run: RemotePilotRun, artifact_id: str) -> tuple[GenerationArtifact, bytes]:
         artifact = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
