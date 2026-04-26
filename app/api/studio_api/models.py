@@ -588,6 +588,18 @@ class GenerationArtifactView(GenerationArtifact):
     playback: GenerationArtifactPlayback | None = None
 
 
+class PlaybackVerificationSummary(BaseModel):
+    status: Literal["not_applicable", "verified", "needs_check", "failed", "stale", "download_only_present"] = "not_applicable"
+    streamable_count: int = 0
+    verified_count: int = 0
+    failed_count: int = 0
+    stale_count: int = 0
+    not_checked_count: int = 0
+    download_only_count: int = 0
+    required_count: int = 0
+    last_checked_at: str | None = None
+
+
 class GenerationPreview(BaseModel):
     title: str
     lyrics: str
@@ -612,6 +624,7 @@ class PublishJobSummary(BaseModel):
     primary_artifacts: list[GenerationArtifactView] = Field(default_factory=list)
     supporting_artifacts: list[GenerationArtifactView] = Field(default_factory=list)
     missing_roles: list[str] = Field(default_factory=list)
+    playback_verification_summary: PlaybackVerificationSummary = Field(default_factory=PlaybackVerificationSummary)
 
 
 class JobEvent(BaseModel):

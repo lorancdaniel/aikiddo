@@ -147,6 +147,22 @@ function playbackStatusCopy(artifact: GenerationArtifactView) {
   return "Odtwarzanie niedostępne";
 }
 
+function publishPlaybackSummaryCopy(status: string) {
+  if (status === "verified") return "Playback gotowy";
+  if (status === "failed") return "Playback wymaga poprawy";
+  if (status === "stale") return "Playback do ponowienia";
+  if (status === "download_only_present") return "Część video tylko do pobrania";
+  if (status === "needs_check") return "Playback do sprawdzenia";
+  return "Brak video do sprawdzenia";
+}
+
+function publishPlaybackSummaryClass(status: string) {
+  if (status === "verified") return "border-emerald-300/25 bg-emerald-300/10 text-emerald-50";
+  if (status === "failed" || status === "download_only_present") return "border-[var(--coral)]/35 bg-[var(--coral)]/12 text-white";
+  if (status === "stale" || status === "needs_check") return "border-[var(--acid)]/30 bg-[var(--acid)]/12 text-white";
+  return "border-white/10 bg-white/7 text-white";
+}
+
 function playbackVerificationFromArtifact(artifact: GenerationArtifactView): PlaybackVerifyState {
   const verification = artifact.playback?.verification;
   if (!verification || verification.status === "not_checked") return { status: "idle" };
@@ -284,6 +300,7 @@ export default function Home() {
   const [queueStatus, setQueueStatus] = useState<WorkerQueueStatus | null>(null);
   const [artifactPreview, setArtifactPreview] = useState<{ artifactId: string; content: string } | null>(null);
   const [playbackVerification, setPlaybackVerification] = useState<Record<string, PlaybackVerifyState>>({});
+  const [isVerifyingPublishPlaybackAll, setIsVerifyingPublishPlaybackAll] = useState(false);
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
@@ -441,6 +458,12 @@ export default function Home() {
     if (!selectedProject || serverJobDetail?.stage !== "publish.prepare_package" || serverJobDetail.publish?.status !== "ready") return [];
     return serverJobDetail.publish.primary_artifacts;
   }, [selectedProject, serverJobDetail?.publish, serverJobDetail?.stage]);
+
+  const publishPlaybackSummary = serverJobDetail?.publish?.playback_verification_summary ?? null;
+
+  const streamablePublishVideoArtifacts = useMemo(() => {
+    return publishPrimaryArtifacts.filter((artifact) => artifact.mime_type.startsWith("video/") && artifact.playback?.mode === "streamable" && artifact.playback.inline_url);
+  }, [publishPrimaryArtifacts]);
 
   useEffect(() => {
     if (!publishPrimaryArtifacts.length) return;
@@ -799,6 +822,7 @@ export default function Home() {
         }
       }));
       setServerEvents(await fetchJobEvents(serverJobDetail.id));
+      setServerJobDetail(await fetchJobDetail(serverJobDetail.id));
     } catch (caught) {
       const checkedAt = new Date().toISOString();
       const failure =
@@ -848,6 +872,7 @@ export default function Home() {
           }
         }));
         setServerEvents(await fetchJobEvents(serverJobDetail.id));
+        setServerJobDetail(await fetchJobDetail(serverJobDetail.id));
         return;
       } catch {
         setError("Nie udało się zapisać audytu weryfikacji playbacku.");
@@ -858,6 +883,21 @@ export default function Home() {
       }));
     } finally {
       window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function handleVerifyAllPublishPlayback() {
+    if (!serverJobDetail || !streamablePublishVideoArtifacts.length) return;
+    setIsVerifyingPublishPlaybackAll(true);
+    try {
+      for (const artifact of streamablePublishVideoArtifacts) {
+        const inlineUrl = artifact.playback?.inline_url;
+        if (!inlineUrl) continue;
+        await handleVerifyPlayback(artifact, buildApiUrl(inlineUrl));
+      }
+      setServerJobDetail(await fetchJobDetail(serverJobDetail.id));
+    } finally {
+      setIsVerifyingPublishPlaybackAll(false);
     }
   }
 
@@ -1778,6 +1818,36 @@ export default function Home() {
                 <p className="mt-3 text-4xl font-black leading-tight">Ready</p>
                 <p className="mt-4 text-sm font-semibold">{publishPackageArtifact.package_path}</p>
               </div>
+              {publishPlaybackSummary ? (
+                <div
+                  className={`mt-4 rounded-2xl border p-4 ${publishPlaybackSummaryClass(publishPlaybackSummary.status)}`}
+                  data-testid="publish-playback-summary"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase text-white/50">Playback video</p>
+                      <p className="mt-1 text-2xl font-black leading-tight">{publishPlaybackSummaryCopy(publishPlaybackSummary.status)}</p>
+                    </div>
+                    <button
+                      className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-black text-[var(--ink)] transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-55"
+                      data-testid="publish-playback-verify-all"
+                      disabled={isVerifyingPublishPlaybackAll || !streamablePublishVideoArtifacts.length}
+                      onClick={handleVerifyAllPublishPlayback}
+                      type="button"
+                    >
+                      {isVerifyingPublishPlaybackAll ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
+                      {isVerifyingPublishPlaybackAll ? "Sprawdzam paczkę" : "Sprawdź wszystkie video"}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-white/68">
+                    <span>{publishPlaybackSummary.verified_count}/{publishPlaybackSummary.required_count} zweryfikowane</span>
+                    <span>{publishPlaybackSummary.streamable_count} inline</span>
+                    {publishPlaybackSummary.download_only_count ? <span>{publishPlaybackSummary.download_only_count} tylko download</span> : null}
+                    {publishPlaybackSummary.failed_count ? <span>{publishPlaybackSummary.failed_count} błąd</span> : null}
+                    {publishPlaybackSummary.stale_count ? <span>{publishPlaybackSummary.stale_count} nieaktualne</span> : null}
+                  </div>
+                </div>
+              ) : null}
               {publishPrimaryArtifacts.length ? (
                 <div className="mt-4 grid grid-flow-dense grid-cols-1 gap-3 md:grid-cols-2" data-testid="publish-primary-downloads">
                   {publishPrimaryArtifacts.map((artifact) => {

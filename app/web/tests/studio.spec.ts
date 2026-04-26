@@ -212,7 +212,18 @@ test("operator sees primary publish package downloads", async ({ page }) => {
     status: "ready",
     primary_artifacts: artifacts.filter((artifact) => artifact.is_primary),
     supporting_artifacts: artifacts.filter((artifact) => !artifact.is_primary),
-    missing_roles: []
+    missing_roles: [],
+    playback_verification_summary: {
+      status: "download_only_present",
+      streamable_count: 1,
+      verified_count: 0,
+      failed_count: 0,
+      stale_count: 0,
+      not_checked_count: 1,
+      download_only_count: 1,
+      required_count: 2,
+      last_checked_at: null as string | null
+    }
   };
 
   await page.route("**/api/**", async (route) => {
@@ -287,6 +298,17 @@ test("operator sees primary publish package downloads", async ({ page }) => {
           stale: false
         };
       }
+      publish.playback_verification_summary = {
+        status: "download_only_present",
+        streamable_count: 1,
+        verified_count: 1,
+        failed_count: 0,
+        stale_count: 0,
+        not_checked_count: 0,
+        download_only_count: 1,
+        required_count: 2,
+        last_checked_at: now
+      };
       return json({
         verification: {
           id: "pv_test",
@@ -354,15 +376,20 @@ test("operator sees primary publish package downloads", async ({ page }) => {
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("full-episode.mp4");
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("reel-01.mp4");
   await expect(page.getByTestId("publish-primary-downloads")).not.toContainText("old-reel-99.mp4");
+  await expect(page.getByTestId("publish-playback-summary")).toContainText("Część video tylko do pobrania");
+  await expect(page.getByTestId("publish-playback-summary")).toContainText("0/2 zweryfikowane");
+  await expect(page.getByTestId("publish-playback-summary")).toContainText("1 tylko download");
   await expect(page.getByTestId("publish-video-player-publish_full_episode_mp4")).toHaveAttribute(
     "src",
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4"
   );
   await expect(page.getByTestId("publish-video-cache-status-publish_full_episode_mp4")).toContainText("cache po pierwszym starcie");
-  await page.getByTestId("publish-video-verify-button-publish_full_episode_mp4").click();
+  await page.getByTestId("publish-playback-verify-all").click();
   await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("Zweryfikowano");
   await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("cache: hit");
+  await expect(page.getByTestId("publish-playback-summary")).toContainText("1/2 zweryfikowane");
   await page.reload();
+  await expect(page.getByTestId("publish-playback-summary")).toContainText("1/2 zweryfikowane");
   await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("Zweryfikowano");
   await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveCount(0);
   await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("Tylko download");

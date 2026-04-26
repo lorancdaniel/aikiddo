@@ -3395,9 +3395,54 @@ def test_publish_job_detail_returns_backend_owned_primary_artifacts(tmp_path: Pa
     assert full_episode_playback["source_label"] == "server_disk"
     assert full_episode_playback["cache"]["status"] == "not_cached_until_playback"
     assert full_episode_playback["cache"]["max_artifact_bytes"] == 5 * 1024 * 1024 * 1024
+    assert detail["publish"]["playback_verification_summary"] == {
+        "status": "needs_check",
+        "streamable_count": 2,
+        "verified_count": 0,
+        "failed_count": 0,
+        "stale_count": 0,
+        "not_checked_count": 2,
+        "download_only_count": 0,
+        "required_count": 2,
+        "last_checked_at": None,
+    }
     assert detail["publish"]["primary_artifacts"][0]["playback"] is None
     assert detail["artifacts"][0]["role"] == "publish_manifest"
     assert detail["artifacts"][0]["is_primary"] is False
+
+    for artifact_id in ("publish_full_episode_mp4", "publish_reel_01_mp4"):
+        verification_response = client.post(
+            f"/api/jobs/{job_id}/artifacts/{artifact_id}/playback-verifications",
+            json={
+                "source": "browser_range_get",
+                "method": "GET",
+                "range": "bytes=0-0",
+                "http_status": 206,
+                "headers": {
+                    "content_range": "bytes 0-0/10485760",
+                    "accept_ranges": "bytes",
+                    "content_length": "1",
+                    "x_artifact_cache": "hit",
+                    "x_artifact_cache_policy": "server-disk-media-cache",
+                },
+                "body_bytes_read": 1,
+                "duration_ms": 18,
+                "client_checked_at": "2026-04-26T12:05:00+00:00",
+                "client_verdict": "verified",
+                "error": None,
+            },
+        )
+        assert verification_response.status_code == 200
+
+    verified_response = client.get(f"/api/jobs/{job_id}")
+    assert verified_response.status_code == 200
+    verified_detail = verified_response.json()
+    verified_summary = verified_detail["publish"]["playback_verification_summary"]
+    assert verified_summary["status"] == "verified"
+    assert verified_summary["streamable_count"] == 2
+    assert verified_summary["verified_count"] == 2
+    assert verified_summary["not_checked_count"] == 0
+    assert verified_summary["last_checked_at"] is not None
 
 
 def test_video_job_artifact_is_served_inline_for_web_playback(tmp_path: Path, monkeypatch) -> None:

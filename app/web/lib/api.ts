@@ -284,11 +284,24 @@ export type GenerationArtifactView = GenerationArtifact & {
   playback: GenerationArtifactPlayback | null;
 };
 
+export type PlaybackVerificationSummary = {
+  status: "not_applicable" | "verified" | "needs_check" | "failed" | "stale" | "download_only_present";
+  streamable_count: number;
+  verified_count: number;
+  failed_count: number;
+  stale_count: number;
+  not_checked_count: number;
+  download_only_count: number;
+  required_count: number;
+  last_checked_at: string | null;
+};
+
 export type PublishJobSummary = {
   status: "ready" | "missing" | "incomplete";
   primary_artifacts: GenerationArtifactView[];
   supporting_artifacts: GenerationArtifactView[];
   missing_roles: string[];
+  playback_verification_summary: PlaybackVerificationSummary;
 };
 
 export type GenerationPreview = {

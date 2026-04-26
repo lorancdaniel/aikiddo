@@ -44,6 +44,7 @@ from .models import (
     PlaybackVerificationInput,
     PlaybackVerificationRecord,
     PlaybackVerificationResult,
+    PlaybackVerificationSummary,
     Project,
     ProjectNextAction,
     ProjectSeriesLinkInput,
@@ -1383,12 +1384,55 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             key=lambda artifact: (primary_order.get(artifact.role, 99), artifact.artifact_id),
         )
         supporting_artifacts = [artifact for artifact in artifacts if not artifact.is_primary]
+        playback_summary = build_playback_verification_summary(primary_artifacts)
         return PublishJobSummary(
             status=status_value,
             primary_artifacts=primary_artifacts if status_value == "ready" else [],
             supporting_artifacts=supporting_artifacts,
             missing_roles=missing_roles,
+            playback_verification_summary=playback_summary if status_value == "ready" else PlaybackVerificationSummary(),
         )
+
+    def build_playback_verification_summary(artifacts: list[GenerationArtifactView]) -> PlaybackVerificationSummary:
+        summary = PlaybackVerificationSummary()
+        last_checked_at: str | None = None
+        for artifact in artifacts:
+            playback = artifact.playback
+            if playback is None or playback.media_type != "video":
+                continue
+            if playback.mode == "download_only":
+                summary.download_only_count += 1
+                summary.required_count += 1
+                continue
+            if playback.mode != "streamable":
+                continue
+            summary.streamable_count += 1
+            summary.required_count += 1
+            verification = playback.verification
+            if verification.checked_at and (last_checked_at is None or verification.checked_at > last_checked_at):
+                last_checked_at = verification.checked_at
+            if verification.stale:
+                summary.stale_count += 1
+            elif verification.status == "verified":
+                summary.verified_count += 1
+            elif verification.status == "failed":
+                summary.failed_count += 1
+            else:
+                summary.not_checked_count += 1
+        summary.last_checked_at = last_checked_at
+        if summary.streamable_count == 0 and summary.download_only_count == 0:
+            summary.status = "not_applicable"
+        elif summary.failed_count:
+            summary.status = "failed"
+        elif summary.stale_count:
+            summary.status = "stale"
+        elif summary.download_only_count:
+            summary.status = "download_only_present"
+        elif summary.verified_count == summary.streamable_count:
+            summary.status = "verified"
+        else:
+            summary.status = "needs_check"
+        return summary
 
     def build_generation_job_detail(job: Job) -> GenerationJobDetail:
         normalized_status, phase = normalize_job_status(job.status)
