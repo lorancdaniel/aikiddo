@@ -259,6 +259,52 @@ def call_local_model_image(*, prompt: str) -> bytes:
     return base64.b64decode(data[0]["b64_json"])
 
 
+def call_local_model_video(*, prompt: str, source_image_path: pathlib.Path, duration_seconds: int) -> bytes:
+    endpoint = os.getenv("AIKIDDO_VIDEO_ENDPOINT", "").strip()
+    if not endpoint:
+        raise WorkerConfigurationError("AIKIDDO_VIDEO_ENDPOINT is required for local video generation.")
+    model = os.getenv("AIKIDDO_VIDEO_MODEL", "Wan2.2-I2V-A14B").strip() or "Wan2.2-I2V-A14B"
+    timeout = int(os.getenv("AIKIDDO_MODEL_TIMEOUT_SEC", "90"))
+    image_b64 = base64.b64encode(source_image_path.read_bytes()).decode("ascii")
+    request_payload = {
+        "model": model,
+        "prompt": prompt,
+        "image": image_b64,
+        "duration_seconds": max(1, int(duration_seconds)),
+        "response_format": "mp4",
+    }
+    headers = {"Content-Type": "application/json"}
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = response.headers.get("Content-Type", "")
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise WorkerConfigurationError(f"Local model video generation failed with HTTP {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise WorkerConfigurationError(f"Local model video generation failed: {exc.reason}") from exc
+
+    if "application/json" not in content_type:
+        return body
+
+    payload = json.loads(body.decode("utf-8"))
+    data = payload.get("data", [])
+    if data and isinstance(data[0], dict):
+        encoded_video = data[0].get("b64_json") or data[0].get("b64_video") or data[0].get("video")
+        if isinstance(encoded_video, str):
+            return base64.b64decode(encoded_video)
+    encoded_video = payload.get("b64_video") or payload.get("video")
+    if isinstance(encoded_video, str):
+        return base64.b64decode(encoded_video)
+    raise WorkerConfigurationError("Local model video generation returned no base64 MP4 video.")
+
+
 def find_upstream_artifact_path(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> pathlib.Path:
     for upstream in manifest.get("pipeline_context", []):
         if upstream.get("stage") != stage:
@@ -747,6 +793,7 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
     audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
     image_paths = collect_upstream_artifact_paths(manifest, stage="keyframes.generate")
+    generated_scene_paths = collect_upstream_artifact_paths(manifest, stage="video.scenes.generate")
     episode_slug = str(full_episode.get("episode_slug") or slugify(str(full_episode.get("title") or "episode")) or "episode")
     scene_dir = f"renders/{episode_slug}/scenes"
     clips: list[dict[str, Any]] = []
@@ -755,24 +802,29 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
         clip_id = str(clip.get("id") or f"video_scene_{index:02d}")
         keyframe_id = str(clip.get("source_keyframe_id") or f"keyframe_{index:02d}")
         source_image = str(clip.get("source_keyframe_image") or f"{keyframe_id}.png")
+        duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
+        output_path = f"{scene_dir}/{clip_id}.mp4"
+        clip_plan = {
+            "id": clip_id,
+            "source_keyframe_id": keyframe_id,
+            "source_keyframe_image": source_image,
+            "duration_seconds": duration_seconds,
+            "motion_prompt": str(clip.get("motion_prompt") or ""),
+            "camera_motion": str(clip.get("camera_motion") or ""),
+            "transition": str(clip.get("transition") or "cut"),
+            "output_path": output_path,
+        }
+        scene_video_filename = str(clip.get("scene_video_filename") or "")
+        if scene_video_filename and scene_video_filename in generated_scene_paths:
+            clip_plan["source_video_path"] = str(generated_scene_paths[scene_video_filename])
+            clips.append(clip_plan)
+            commands.append(f"cp {shlex.quote(str(generated_scene_paths[scene_video_filename]))} {shlex.quote(output_path)}")
+            continue
         if source_image not in image_paths:
             raise WorkerConfigurationError(f"Required keyframe image {source_image} is missing from keyframes.generate output.")
         source_image_path = image_paths[source_image]
-        duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
-        output_path = f"{scene_dir}/{clip_id}.mp4"
-        clips.append(
-            {
-                "id": clip_id,
-                "source_keyframe_id": keyframe_id,
-                "source_keyframe_image": source_image,
-                "source_image_path": str(source_image_path),
-                "duration_seconds": duration_seconds,
-                "motion_prompt": str(clip.get("motion_prompt") or ""),
-                "camera_motion": str(clip.get("camera_motion") or ""),
-                "transition": str(clip.get("transition") or "cut"),
-                "output_path": output_path,
-            }
-        )
+        clip_plan["source_image_path"] = str(source_image_path)
+        clips.append(clip_plan)
         video_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
         commands.append(
             " ".join(
@@ -837,12 +889,20 @@ def render_full_episode_video_assets(job_dir: pathlib.Path, render_plan: dict[st
     for index, clip in enumerate(clips, start=1):
         if not isinstance(clip, dict):
             raise WorkerConfigurationError("render.full_episode clips must be JSON objects.")
-        source_path = pathlib.Path(str(clip.get("source_image_path") or ""))
-        if not source_path.exists():
-            raise WorkerConfigurationError(f"Source keyframe image does not exist: {source_path}")
         output_rel = pathlib.Path(str(clip.get("output_path") or f"renders/{render_plan['episode_slug']}/scenes/video_scene_{index:02d}.mp4"))
         output_path = job_dir / output_rel
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        source_video_value = str(clip.get("source_video_path") or "").strip()
+        source_video_path = pathlib.Path(source_video_value) if source_video_value else None
+        if source_video_path is not None and source_video_path.exists():
+            shutil.copyfile(source_video_path, output_path)
+            scene_paths.append(output_path)
+            descriptors.append((f"scene_video_{index:02d}_mp4", "scene_video", str(output_rel), "video/mp4"))
+            logs.append(f"Copied generated scene MP4: {output_rel}")
+            continue
+        source_path = pathlib.Path(str(clip.get("source_image_path") or ""))
+        if not source_path.exists():
+            raise WorkerConfigurationError(f"Source keyframe image does not exist: {source_path}")
         duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
         command = [
             ffmpeg,
@@ -1442,11 +1502,40 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 "render_policy": "server-owned scene files",
                 "status": "ready_for_scene_review",
             }
+            descriptors = [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")]
+            payloads = {"video_scenes.json": video_scenes}
         else:
             video_scenes = make_local_model_video_scenes_payload(manifest, brief)
-        return [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")], {
-            "video_scenes.json": video_scenes,
-        }
+            keyframe_paths = collect_upstream_artifact_paths(manifest, stage="keyframes.generate")
+            descriptors = [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")]
+            payloads = {"video_scenes.json": video_scenes}
+            for index, clip in enumerate(video_scenes.get("clips", []), start=1):
+                if not isinstance(clip, dict):
+                    raise WorkerConfigurationError("video.scenes.generate clips must be JSON objects.")
+                clip_id = str(clip.get("id") or f"video_scene_{index:02d}")
+                keyframe_id = str(clip.get("source_keyframe_id") or f"keyframe_{index:02d}")
+                source_image = str(clip.get("source_keyframe_image") or f"{keyframe_id}.png")
+                if source_image not in keyframe_paths:
+                    raise WorkerConfigurationError(f"Required keyframe image {source_image} is missing from keyframes.generate output.")
+                filename = f"scene_videos/{clip_id}.mp4"
+                duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
+                prompt = "\n".join(
+                    [
+                        "Preschool-safe gentle motion only.",
+                        str(clip.get("motion_prompt") or ""),
+                        f"Camera: {clip.get('camera_motion') or 'gentle static framing'}",
+                        f"Transition intent: {clip.get('transition') or 'cut'}",
+                        f"Safety: {clip.get('safety_note') or 'preschool-safe gentle motion'}",
+                    ]
+                ).strip()
+                clip["scene_video_filename"] = filename
+                descriptors.append((f"scene_video_{index:02d}_mp4", "scene_video", filename, "video/mp4"))
+                payloads[filename] = call_local_model_video(
+                    prompt=prompt,
+                    source_image_path=keyframe_paths[source_image],
+                    duration_seconds=duration_seconds,
+                )
+        return descriptors, payloads
 
     if stage == "render.full_episode":
         if worker_mode() != "deterministic":

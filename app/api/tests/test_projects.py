@@ -814,7 +814,22 @@ def test_aikiddo_worker_uses_local_model_provider_for_video_scenes(tmp_path: Pat
             ],
         }
 
+    video_calls: list[dict] = []
+
+    def fake_call_local_model_video(*, prompt: str, source_image_path: Path, duration_seconds: int) -> bytes:
+        video_calls.append(
+            {
+                "prompt": prompt,
+                "source_image_path": source_image_path,
+                "duration_seconds": duration_seconds,
+            }
+        )
+        assert source_image_path == keyframes_job_dir / "keyframe_01.png"
+        assert "gentle" in prompt or "small friendly wave" in prompt or "slow brushing" in prompt
+        return f"fake scene mp4 {len(video_calls)}".encode("utf-8")
+
     monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
+    monkeypatch.setattr(worker, "call_local_model_video", fake_call_local_model_video, raising=False)
     descriptors, payloads = worker.stage_files(
         "video.scenes.generate",
         {
@@ -834,11 +849,19 @@ def test_aikiddo_worker_uses_local_model_provider_for_video_scenes(tmp_path: Pat
         },
     )
 
-    assert descriptors == [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")]
+    assert descriptors == [
+        ("video_scenes_json", "video_scenes", "video_scenes.json", "application/json"),
+        ("scene_video_01_mp4", "scene_video", "scene_videos/video_scene_01.mp4", "video/mp4"),
+        ("scene_video_02_mp4", "scene_video", "scene_videos/video_scene_02.mp4", "video/mp4"),
+        ("scene_video_03_mp4", "scene_video", "scene_videos/video_scene_03.mp4", "video/mp4"),
+    ]
     assert payloads["video_scenes.json"]["render_policy"] == "server-owned scene files"
     assert payloads["video_scenes.json"]["status"] == "ready_for_scene_review"
     assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_id"] == "keyframe_01"
     assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_image"] == "keyframe_01.png"
+    assert payloads["video_scenes.json"]["clips"][0]["scene_video_filename"] == "scene_videos/video_scene_01.mp4"
+    assert payloads["scene_videos/video_scene_01.mp4"] == b"fake scene mp4 1"
+    assert len(video_calls) == 3
 
 
 def test_aikiddo_worker_uses_local_model_provider_for_full_episode_render_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -1125,6 +1148,123 @@ def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monke
     assert ffmpeg_calls[1][:5] == ["ffmpeg", "-y", "-f", "concat", "-safe"]
     assert preview["song_plan"]["artifact_count"] == len(artifacts)
     assert any("Rendered full episode MP4" in line for line in logs)
+
+
+def test_aikiddo_worker_assembles_full_episode_from_generated_scene_videos(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
+
+    audio_job_dir = tmp_path / "audio_job"
+    audio_job_dir.mkdir()
+    (audio_job_dir / "audio_plan.json").write_text(
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "local-child-safe-guide"}),
+        encoding="utf-8",
+    )
+    audio_output_path = audio_job_dir / "output_manifest.json"
+    audio_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(audio_job_dir),
+                "artifacts": [{"artifact_id": "audio_plan_json", "filename": "audio_plan.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    video_job_dir = tmp_path / "video_scenes_job"
+    video_job_dir.mkdir()
+    (video_job_dir / "scene_videos").mkdir()
+    (video_job_dir / "scene_videos" / "video_scene_01.mp4").write_bytes(b"local video scene 1")
+    (video_job_dir / "video_scenes.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "render_policy": "server-owned scene files",
+                "status": "ready_for_scene_review",
+                "clips": [
+                    {
+                        "id": "video_scene_01",
+                        "source_keyframe_id": "keyframe_01",
+                        "source_keyframe_image": "keyframe_01.png",
+                        "scene_video_filename": "scene_videos/video_scene_01.mp4",
+                        "duration_seconds": 4,
+                        "motion_prompt": "small friendly wave, no sudden motion",
+                        "camera_motion": "locked gentle push-in",
+                        "transition": "soft dissolve",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    video_output_path = video_job_dir / "output_manifest.json"
+    video_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(video_job_dir),
+                "artifacts": [
+                    {"artifact_id": "video_scenes_json", "filename": "video_scenes.json"},
+                    {"artifact_id": "scene_video_01_mp4", "filename": "scene_videos/video_scene_01.mp4", "mime_type": "video/mp4"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "full episode render manifest planner" in instructions
+        return {
+            "title": "Brush Song",
+            "episode_slug": "brush-song",
+            "duration_seconds": 4,
+            "scene_count": 1,
+            "output_path": "renders/brush-song/full-episode.mp4",
+            "poster_frame": "video_scene_01",
+            "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
+            "assembly_notes": ["Concatenate generated local video scenes."],
+            "status": "draft",
+        }
+
+    ffmpeg_calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, text: bool, capture_output: bool, check: bool):
+        ffmpeg_calls.append(command)
+        output_path = Path(cwd) / command[-1]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"assembled mp4 bytes")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    job_dir = tmp_path / "render_job"
+    job_dir.mkdir()
+    artifacts, _, logs = worker.write_stage_outputs(
+        job_dir,
+        {
+            "job_id": "remote_full_episode_from_scene_video",
+            "project_id": "project_full_episode_from_scene_video",
+            "stage": "render.full_episode",
+            "pipeline_context": [
+                {"stage": "audio.generate_or_import", "output_manifest_path": str(audio_output_path)},
+                {"stage": "video.scenes.generate", "output_manifest_path": str(video_output_path)},
+            ],
+        },
+        "render.full_episode",
+        {"title": "Brush Song", "topic": "tooth brushing", "age_range": "3-5"},
+    )
+
+    artifact_ids = {artifact["artifact_id"] for artifact in artifacts}
+    assert "full_episode_mp4" in artifact_ids
+    assert "scene_video_01_mp4" in artifact_ids
+    assert (job_dir / "renders" / "brush-song" / "scenes" / "video_scene_01.mp4").read_bytes() == b"local video scene 1"
+    assert (job_dir / "renders" / "brush-song" / "full-episode.mp4").read_bytes() == b"assembled mp4 bytes"
+    assert len(ffmpeg_calls) == 1
+    assert ffmpeg_calls[0][:5] == ["ffmpeg", "-y", "-f", "concat", "-safe"]
+    assert all("-loop" not in call for call in ffmpeg_calls)
+    assert any("Copied generated scene MP4" in line for line in logs)
 
 
 def test_aikiddo_worker_uses_local_model_provider_for_reels_render_manifest(tmp_path: Path, monkeypatch) -> None:
