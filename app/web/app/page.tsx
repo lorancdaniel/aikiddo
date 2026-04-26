@@ -166,6 +166,16 @@ function publishPlaybackSummaryClass(status: string) {
 function playbackVerificationFromArtifact(artifact: GenerationArtifactView): PlaybackVerifyState {
   const verification = artifact.playback?.verification;
   if (!verification || verification.status === "not_checked") return { status: "idle" };
+  if (verification.stale) {
+    return {
+      status: "stale",
+      checkedAt: verification.checked_at ?? "",
+      httpStatus: verification.http_status ?? undefined,
+      cache: verification.cache.header,
+      cachePolicy: verification.cache.policy,
+      contentRange: verification.content_range
+    };
+  }
   if (verification.status === "verified") {
     return {
       status: "verified",
@@ -180,7 +190,7 @@ function playbackVerificationFromArtifact(artifact: GenerationArtifactView): Pla
     status: "failed",
     checkedAt: verification.checked_at ?? "",
     httpStatus: verification.http_status ?? undefined,
-    error: verification.stale ? "Poprzednia weryfikacja jest nieaktualna" : verification.failure_reason ?? "Nie udało się zweryfikować playbacku",
+    error: verification.failure_reason ?? "Nie udało się zweryfikować playbacku",
     cache: verification.cache.header,
     cachePolicy: verification.cache.policy,
     contentRange: verification.content_range
@@ -190,6 +200,14 @@ function playbackVerificationFromArtifact(artifact: GenerationArtifactView): Pla
 type PlaybackVerifyState =
   | { status: "idle" }
   | { status: "checking" }
+  | {
+      status: "stale";
+      checkedAt: string;
+      httpStatus?: number;
+      cache?: string | null;
+      cachePolicy?: string | null;
+      contentRange?: string | null;
+    }
   | {
       status: "verified";
       checkedAt: string;
@@ -1904,7 +1922,7 @@ export default function Home() {
                                   type="button"
                                 >
                                   {verifyState.status === "checking" ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
-                                  {verifyState.status === "checking" ? "Sprawdzam" : "Sprawdź odtwarzanie"}
+                                  {verifyState.status === "checking" ? "Sprawdzam" : verifyState.status === "stale" ? "Sprawdź ponownie" : "Sprawdź odtwarzanie"}
                                 </button>
                                 <a
                                   className="rounded-full bg-white px-3 py-1 text-[var(--ink)] transition hover:scale-[1.03]"
@@ -1923,6 +1941,14 @@ export default function Home() {
                               >
                                 <CheckCircle2 size={14} />
                                 <span>Zweryfikowano · cache: {verifyState.cache ?? "unknown"} · {verifyState.cachePolicy ?? "policy unknown"}</span>
+                              </div>
+                            ) : verifyState.status === "stale" ? (
+                              <div
+                                className="flex flex-wrap items-center gap-2 border-t border-[var(--acid)]/25 bg-[var(--acid)]/12 px-3 py-2 text-xs font-bold text-white"
+                                data-testid={`publish-video-verify-status-${artifact.artifact_id}`}
+                              >
+                                <RotateCcw size={14} />
+                                <span>Weryfikacja nieaktualna · sprawdź ponownie</span>
                               </div>
                             ) : verifyState.status === "failed" ? (
                               <div
