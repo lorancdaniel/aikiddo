@@ -263,7 +263,24 @@ def stage_files(stage: str, brief: dict[str, Any]) -> tuple[list[tuple[str, str,
 
 
 def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: str, brief: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    pipeline_context = manifest.get("pipeline_context", [])
+    if pipeline_context:
+        write_json(
+            job_dir / "input_context.json",
+            {
+                "schema_version": "input-context.v1",
+                "job_id": manifest["job_id"],
+                "project_id": manifest["project_id"],
+                "stage": stage,
+                "upstream_stages": pipeline_context,
+            },
+        )
     descriptors, payloads = stage_files(stage, brief)
+    if pipeline_context:
+        descriptors = [
+            ("input_context_json", "input_context", "input_context.json", "application/json"),
+            *descriptors,
+        ]
     for filename, payload in payloads.items():
         path = job_dir / filename
         if filename.endswith(".json"):
@@ -283,6 +300,7 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
             "stage": stage,
             "topic": brief["topic"],
             "artifact_count": len(artifacts),
+            "upstream_stage_count": len(pipeline_context),
             "storage_policy": "server",
         },
         "safety_notes": [

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+from typing import Any
 from uuid import uuid4
 
 from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun, ServerConnection, ServerProfile, utc_now
@@ -35,7 +36,15 @@ class SshGenerationServer:
             return ServerConnection(mode="ssh", reachable=False, message=message)
         return ServerConnection(mode="ssh", reachable=True, message=result.stdout.strip())
 
-    def run_remote_job(self, project_id: str, brief: Brief, stage: str, profile: ServerProfile, job_id: str | None = None) -> RemotePilotRun:
+    def run_remote_job(
+        self,
+        project_id: str,
+        brief: Brief,
+        stage: str,
+        profile: ServerProfile,
+        job_id: str | None = None,
+        pipeline_context: list[dict[str, Any]] | None = None,
+    ) -> RemotePilotRun:
         now = utc_now()
         job_id = job_id or f"remote_{uuid4().hex[:12]}"
         remote_job_dir = f"{profile.remote_root.rstrip('/')}/jobs/{job_id}"
@@ -58,6 +67,7 @@ class SshGenerationServer:
                 "artifact_root_policy": "project/job scoped",
                 "client_may_upload_outputs": False,
             },
+            "pipeline_context": pipeline_context or [],
             "brief": brief.model_dump(mode="json"),
             "created_at": now,
         }

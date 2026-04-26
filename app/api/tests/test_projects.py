@@ -282,6 +282,59 @@ def test_aikiddo_worker_is_stage_aware(tmp_path: Path, stage: str, expected_arti
     assert "storage=server" in worker_log
 
 
+def test_aikiddo_worker_persists_input_context_artifact(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job_with_context"
+    job_dir.mkdir()
+    manifest = {
+        "schema_version": "job.v1",
+        "job_id": "remote_storyboard_context",
+        "project_id": "project_context",
+        "stage": "storyboard.generate",
+        "job_type": "kids_song_pilot",
+        "adapter": "ssh",
+        "pipeline_context": [
+            {
+                "stage": "lyrics.generate",
+                "status": "completed",
+                "job_id": "remote_lyrics_context",
+                "output_manifest_path": "/srv/aikiddo/jobs/remote_lyrics_context/output_manifest.json",
+                "artifacts": [{"artifact_id": "lyrics_txt", "filename": "lyrics.txt"}],
+            }
+        ],
+        "brief": {
+            "id": "brief_context",
+            "title": "Colors Song",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+            "forbidden_motifs": [],
+            "created_at": "2026-04-26T00:00:00+00:00",
+        },
+        "created_at": "2026-04-26T00:00:00+00:00",
+    }
+    (job_dir / "job_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
+    result = subprocess.run(
+        [sys.executable, str(worker_path), str(job_dir)],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    output = json.loads((job_dir / "output_manifest.json").read_text(encoding="utf-8"))
+    context = json.loads((job_dir / "input_context.json").read_text(encoding="utf-8"))
+    assert "input_context_json" in [artifact["artifact_id"] for artifact in output["artifacts"]]
+    assert output["preview"]["song_plan"]["upstream_stage_count"] == 1
+    assert context["schema_version"] == "input-context.v1"
+    assert context["upstream_stages"][0]["stage"] == "lyrics.generate"
+    assert context["upstream_stages"][0]["output_manifest_path"].endswith("/remote_lyrics_context/output_manifest.json")
+
+
 def test_health_reports_mock_adapter(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
@@ -375,6 +428,76 @@ def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypa
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
     assert not (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
+
+
+def test_ssh_job_manifest_includes_upstream_pipeline_context(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Context song",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+
+    manifests: list[dict] = []
+    job_projects: dict[str, str] = {}
+    job_stages: dict[str, str] = {}
+
+    class Completed:
+        def __init__(self, stdout: str = "ok\n") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, *, input=None, text=None, capture_output=None, timeout=None, check=None):
+        if input and "job_manifest.json" in input:
+            manifest = extract_job_manifest_from_ssh_script(input)
+            manifests.append(manifest)
+            job_projects[manifest["job_id"]] = manifest["project_id"]
+            job_stages[manifest["job_id"]] = manifest["stage"]
+            return Completed(stdout="remote script completed\n")
+        if command[-1].startswith("cat ") and command[-1].endswith("output_manifest.json"):
+            job_id = command[-1].split("/jobs/", 1)[1].split("/", 1)[0]
+            return Completed(stdout=json.dumps(remote_output_fixture(job_projects[job_id], stage=job_stages[job_id])))
+        return Completed(stdout="remote script completed\n")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    lyrics_job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
+    client.post(f"/api/projects/{project['id']}/stages/lyrics.generate/approve", json={})
+    characters_job = client.post(f"/api/projects/{project['id']}/jobs/characters.import_or_approve").json()
+
+    assert lyrics_job["status"] == "needs_review"
+    assert characters_job["status"] == "needs_review"
+    assert manifests[0]["pipeline_context"] == [
+        {"stage": "brief.generate", "status": "completed", "job_id": None}
+    ]
+    characters_context = manifests[1]["pipeline_context"]
+    assert [item["stage"] for item in characters_context] == ["brief.generate", "lyrics.generate"]
+    lyrics_context = next(item for item in characters_context if item["stage"] == "lyrics.generate")
+    assert lyrics_context["status"] == "completed"
+    assert lyrics_context["job_id"] == lyrics_job["id"]
+    assert lyrics_context["output_manifest_path"].endswith(f"/jobs/{lyrics_job['id']}/output_manifest.json")
+    assert lyrics_context["artifacts"][0]["artifact_id"] == "lyrics_txt"
 
 
 def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, monkeypatch) -> None:

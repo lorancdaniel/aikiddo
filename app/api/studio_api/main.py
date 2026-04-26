@@ -228,6 +228,38 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             released_lock_id=lock.lock_id,
         )
 
+    def build_pipeline_context(project: Project, current_stage: str) -> list[dict]:
+        current_index = PIPELINE_STAGES.index(current_stage)
+        context: list[dict] = []
+        for pipeline_stage in project.pipeline[:current_index]:
+            entry = {
+                "stage": pipeline_stage.stage,
+                "status": pipeline_stage.status.value,
+                "job_id": pipeline_stage.job_id,
+            }
+            if pipeline_stage.job_id is not None:
+                upstream_run = storage.get_remote_pilot_run(project.id, pipeline_stage.job_id)
+                if upstream_run is not None:
+                    entry.update(
+                        {
+                            "remote_job_dir": upstream_run.remote_job_dir,
+                            "output_manifest_path": upstream_run.output_manifest_path,
+                            "output_files": upstream_run.output_files,
+                            "artifacts": [
+                                {
+                                    "artifact_id": artifact.artifact_id,
+                                    "type": artifact.type,
+                                    "filename": artifact.filename,
+                                    "storage_key": artifact.storage_key,
+                                    "sha256": artifact.sha256,
+                                }
+                                for artifact in upstream_run.artifacts
+                            ],
+                        }
+                    )
+            context.append(entry)
+        return context
+
     def execute_locked_ssh_job(job: Job, project: Project, profile: ServerProfile, lock_id: str) -> Job:
         job.status = StageStatus.RUNNING
         job.message = "SSH worker acquired; generating server artifacts."
@@ -237,7 +269,14 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         set_pipeline_stage(project, job.stage, job)
         storage.save_project(project)
         try:
-            remote_run = ssh_server.run_remote_job(project_id=job.project_id, brief=project.brief, stage=job.stage, profile=profile, job_id=job.id)
+            remote_run = ssh_server.run_remote_job(
+                project_id=job.project_id,
+                brief=project.brief,
+                stage=job.stage,
+                profile=profile,
+                job_id=job.id,
+                pipeline_context=build_pipeline_context(project, job.stage),
+            )
             current_lock = storage.get_worker_lock_raw(SSH_WORKER_RESOURCE)
             if current_lock is None or current_lock.job_id != job.id or current_lock.lock_id != lock_id or current_lock.attempt_id != job.attempt_id:
                 storage.append_job_event(job, "late_worker_completion_ignored", "Worker completion ignored because the lock owner no longer matches.")

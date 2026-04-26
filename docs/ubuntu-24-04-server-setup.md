@@ -11,7 +11,7 @@ Target server seen from the Mac:
 
 The app now runs server-owned SSH generation. The old mock path is still present only as a local fallback; production-style operation should use the SSH server profile and server-side artifacts.
 
-SSH generation now uses the versioned, stage-aware worker script at `scripts/aikiddo_worker.py`. The FastAPI adapter sends that script and `job_manifest.json` to the server job directory, then the server writes `output_manifest.json`, `worker.log`, and all artifacts under `<remote_root>/jobs/<job_id>/`.
+SSH generation now uses the versioned, stage-aware worker script at `scripts/aikiddo_worker.py`. The FastAPI adapter sends that script and `job_manifest.json` to the server job directory, including upstream pipeline context for previous stages. The server then writes `output_manifest.json`, `worker.log`, and all artifacts under `<remote_root>/jobs/<job_id>/`.
 
 ## 1. Add Mac SSH Key To The Server
 
@@ -139,7 +139,7 @@ The current server worker is:
 - source-controlled at `scripts/aikiddo_worker.py`;
 - copied into each remote job directory as `aikiddo_worker.py`;
 - invoked as `python3 "$job_dir/aikiddo_worker.py" "$job_dir"`;
-- responsible for producing stage-specific artifacts, `output_manifest.json`, and `worker.log`.
+- responsible for producing stage-specific artifacts, optional `input_context.json`, `output_manifest.json`, and `worker.log`.
 
 Frontend:
 
@@ -193,7 +193,7 @@ Stack:
 - Backend: app/api, FastAPI, port 8000
 - Frontend: app/web, Next.js, port 3010
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
-- Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json and writes stage-specific output_manifest.json plus server artifacts.
+- Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
 - Next product modules: replace the lightweight worker internals with real lyrics/audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
