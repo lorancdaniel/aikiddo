@@ -3387,6 +3387,15 @@ def test_publish_job_detail_returns_backend_owned_primary_artifacts(tmp_path: Pa
     assert detail["publish"]["primary_artifacts"][0]["role"] == "publish_package_zip"
     assert detail["publish"]["primary_artifacts"][0]["is_primary"] is True
     assert detail["publish"]["primary_artifacts"][0]["download_url"].endswith(f"/jobs/{job_id}/artifacts/publish_package_zip")
+    full_episode_playback = detail["publish"]["primary_artifacts"][1]["playback"]
+    assert full_episode_playback["mode"] == "streamable"
+    assert full_episode_playback["media_type"] == "video"
+    assert full_episode_playback["inline_url"].endswith(f"/jobs/{job_id}/artifacts/publish_full_episode_mp4")
+    assert full_episode_playback["supports_range"] is True
+    assert full_episode_playback["source_label"] == "server_disk"
+    assert full_episode_playback["cache"]["status"] == "not_cached_until_playback"
+    assert full_episode_playback["cache"]["max_artifact_bytes"] == 5 * 1024 * 1024 * 1024
+    assert detail["publish"]["primary_artifacts"][0]["playback"] is None
     assert detail["artifacts"][0]["role"] == "publish_manifest"
     assert detail["artifacts"][0]["is_primary"] is False
 
@@ -3744,11 +3753,20 @@ def test_video_job_artifact_over_cache_limit_bypasses_cache_and_blocks_range(tmp
         f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
         headers={"Range": "bytes=0-3"},
     )
+    detail = client.get(f"/api/jobs/{job_id}").json()
+    playback = detail["artifacts"][0]["playback"]
 
     assert full_response.status_code == 200
     assert full_response.content == mp4_content
     assert full_response.headers["x-artifact-cache"] == "bypass"
     assert full_response.headers["accept-ranges"] == "none"
+    assert playback["mode"] == "download_only"
+    assert playback["inline_url"] is None
+    assert playback["supports_range"] is False
+    assert playback["reason"] == "artifact_exceeds_media_cache_limit"
+    assert playback["cache"]["status"] == "bypass_over_limit"
+    assert playback["cache"]["policy"] == "artifact_size_over_limit:8"
+    assert playback["cache"]["max_artifact_bytes"] == 8
     assert range_response.status_code == 409
     assert range_response.json()["detail"] == {
         "error": "artifact_range_unavailable",

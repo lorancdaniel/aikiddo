@@ -41,6 +41,7 @@ import {
   fetchVideoScenesArtifact,
   FullEpisodeArtifact,
   GenerationArtifact,
+  GenerationArtifactView,
   GenerationJobDetail,
   Job,
   JobEvent,
@@ -135,6 +136,14 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function playbackStatusCopy(artifact: GenerationArtifactView) {
+  if (!artifact.playback) return "Odtwarzanie z dysku serwera";
+  if (artifact.playback.mode === "download_only") return "Tylko download";
+  if (artifact.playback.cache.status === "cached") return "Odtwarzanie · zweryfikowany cache";
+  if (artifact.playback.cache.status === "not_cached_until_playback") return "Odtwarzanie · cache po pierwszym starcie";
+  return "Odtwarzanie niedostępne";
 }
 
 function getStageStatus(project: Project | null, stage: string) {
@@ -1579,6 +1588,9 @@ export default function Home() {
                       selectedProject && serverJobDetail
                         ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${serverJobDetail.id}/artifacts/${artifact.artifact_id}`)
                         : "";
+                    const canStreamVideo =
+                      isVideo && (!artifact.playback || (artifact.playback.mode === "streamable" && Boolean(artifact.playback.inline_url)));
+                    const videoUrl = artifact.playback?.inline_url ? buildApiUrl(artifact.playback.inline_url) : downloadUrl;
                     return (
                       <div
                         key={artifact.artifact_id}
@@ -1602,23 +1614,54 @@ export default function Home() {
                             {isArchive ? <Archive size={18} /> : <Download size={18} />}
                           </span>
                         </div>
-                        {isVideo ? (
+                        {isVideo && canStreamVideo ? (
                           <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black" data-testid={`publish-video-preview-${artifact.artifact_id}`}>
                             <video
                               className="aspect-video w-full bg-black"
                               controls
                               data-testid={`publish-video-player-${artifact.artifact_id}`}
                               preload="metadata"
-                              src={downloadUrl}
+                              src={videoUrl}
                             />
                             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-white/7 px-3 py-2 text-xs font-bold text-white/54">
-                              <span>Odtwarzanie z dysku serwera</span>
+                              <span data-testid={`publish-video-cache-status-${artifact.artifact_id}`}>{playbackStatusCopy(artifact)}</span>
                               <a
                                 className="rounded-full bg-white px-3 py-1 text-[var(--ink)] transition hover:scale-[1.03]"
                                 href={downloadUrl}
                                 rel="noreferrer"
                                 target="_blank"
                               >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        ) : isVideo ? (
+                          <div
+                            className="mt-4 rounded-xl border border-white/10 bg-black/35 p-4"
+                            data-testid={`publish-video-download-only-${artifact.artifact_id}`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p
+                                  className="text-xs font-black text-white"
+                                  data-testid={`publish-video-cache-status-${artifact.artifact_id}`}
+                                >
+                                  {playbackStatusCopy(artifact)}
+                                </p>
+                                <p className="mt-1 text-xs font-bold text-white/45">
+                                  {artifact.playback?.reason === "artifact_exceeds_media_cache_limit"
+                                    ? `Plik przekracza limit cache ${formatBytes(artifact.playback.cache.max_artifact_bytes)}`
+                                    : "Player w przeglądarce jest wyłączony dla tego artefaktu"}
+                                </p>
+                              </div>
+                              <a
+                                className="inline-flex shrink-0 items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-black text-[var(--ink)] transition hover:scale-[1.03]"
+                                aria-label={`Download ${fileNameFromPath(artifact.filename)}`}
+                                href={downloadUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                <Download size={14} />
                                 Download
                               </a>
                             </div>

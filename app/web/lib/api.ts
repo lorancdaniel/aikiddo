@@ -223,11 +223,26 @@ export type GenerationArtifact = {
   public: boolean;
 };
 
+export type GenerationArtifactPlayback = {
+  mode: "streamable" | "download_only" | "unavailable";
+  media_type: "video" | "audio";
+  inline_url: string | null;
+  supports_range: boolean;
+  reason: string | null;
+  source_label: "server_disk";
+  cache: {
+    status: "cached" | "not_cached_until_playback" | "bypass_over_limit" | "disabled" | "unavailable";
+    policy: string;
+    max_artifact_bytes: number;
+  };
+};
+
 export type GenerationArtifactView = GenerationArtifact & {
   download_url: string;
   role: string;
   is_primary: boolean;
   stage: string | null;
+  playback: GenerationArtifactPlayback | null;
 };
 
 export type PublishJobSummary = {

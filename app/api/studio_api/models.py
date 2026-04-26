@@ -515,11 +515,28 @@ class GenerationArtifact(BaseModel):
     public: bool = False
 
 
+class GenerationArtifactPlaybackCache(BaseModel):
+    status: Literal["cached", "not_cached_until_playback", "bypass_over_limit", "disabled", "unavailable"]
+    policy: str
+    max_artifact_bytes: int
+
+
+class GenerationArtifactPlayback(BaseModel):
+    mode: Literal["streamable", "download_only", "unavailable"]
+    media_type: Literal["video", "audio"]
+    inline_url: str | None = None
+    supports_range: bool = False
+    reason: str | None = None
+    source_label: Literal["server_disk"] = "server_disk"
+    cache: GenerationArtifactPlaybackCache
+
+
 class GenerationArtifactView(GenerationArtifact):
     download_url: str
     role: str = "technical_artifact"
     is_primary: bool = False
     stage: str | None = None
+    playback: GenerationArtifactPlayback | None = None
 
 
 class GenerationPreview(BaseModel):

@@ -24,6 +24,8 @@ from .models import (
     EpisodeSpecInput,
     FullEpisodeArtifact,
     GenerationArtifact,
+    GenerationArtifactPlayback,
+    GenerationArtifactPlaybackCache,
     GenerationArtifactView,
     GenerationJobDetail,
     GenerationRunnerState,
@@ -1180,12 +1182,53 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
 
     def build_artifact_view(job: Job, artifact: GenerationArtifact) -> GenerationArtifactView:
         role = publish_artifact_role(artifact) if job.stage == "publish.prepare_package" else "technical_artifact"
+        download_url = f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}"
+        playback = build_artifact_playback(job, artifact, download_url=download_url)
         return GenerationArtifactView(
             **artifact.model_dump(),
-            download_url=f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}",
+            download_url=download_url,
             role=role,
             is_primary=role in {"publish_package_zip", "full_episode_mp4", "vertical_reel_mp4"},
             stage=job.stage,
+            playback=playback,
+        )
+
+    def build_artifact_playback(job: Job, artifact: GenerationArtifact, *, download_url: str) -> GenerationArtifactPlayback | None:
+        if not is_media_artifact(artifact):
+            return None
+        max_artifact_bytes = media_cache_max_artifact_bytes()
+        cache_allowed, cache_policy = media_cache_policy_for(artifact)
+        media_type = "video" if artifact.mime_type.startswith("video/") else "audio"
+        if not cache_allowed:
+            disabled = max_artifact_bytes == 0
+            return GenerationArtifactPlayback(
+                mode="download_only",
+                media_type=media_type,
+                inline_url=None,
+                supports_range=False,
+                reason="media_cache_disabled" if disabled else "artifact_exceeds_media_cache_limit",
+                cache=GenerationArtifactPlaybackCache(
+                    status="disabled" if disabled else "bypass_over_limit",
+                    policy=cache_policy,
+                    max_artifact_bytes=max_artifact_bytes,
+                ),
+            )
+
+        cache_status = "not_cached_until_playback"
+        cache_path = media_cache_path(storage, artifact)
+        index_path = media_cache_index_path(storage, project_id=job.project_id, job_id=job.id, artifact_id=artifact.artifact_id)
+        if cache_index_matches(index_path, artifact, cache_path):
+            cache_status = "cached"
+        return GenerationArtifactPlayback(
+            mode="streamable",
+            media_type=media_type,
+            inline_url=download_url,
+            supports_range=True,
+            cache=GenerationArtifactPlaybackCache(
+                status=cache_status,
+                policy=cache_policy,
+                max_artifact_bytes=max_artifact_bytes,
+            ),
         )
 
     def build_publish_summary(job: Job, artifacts: list[GenerationArtifactView]) -> PublishJobSummary | None:

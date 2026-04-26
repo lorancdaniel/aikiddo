@@ -78,7 +78,20 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_99_mp4",
       role: "technical_artifact",
       is_primary: false,
-      stage: "publish.prepare_package"
+      stage: "publish.prepare_package",
+      playback: {
+        mode: "streamable",
+        media_type: "video",
+        inline_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_99_mp4",
+        supports_range: true,
+        reason: null,
+        source_label: "server_disk",
+        cache: {
+          status: "not_cached_until_playback",
+          policy: "max_artifact_bytes:5368709120",
+          max_artifact_bytes: 5368709120
+        }
+      }
     },
     {
       artifact_id: "publish_package_zip",
@@ -92,7 +105,8 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip",
       role: "publish_package_zip",
       is_primary: true,
-      stage: "publish.prepare_package"
+      stage: "publish.prepare_package",
+      playback: null
     },
     {
       artifact_id: "publish_full_episode_mp4",
@@ -106,7 +120,20 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4",
       role: "full_episode_mp4",
       is_primary: true,
-      stage: "publish.prepare_package"
+      stage: "publish.prepare_package",
+      playback: {
+        mode: "streamable",
+        media_type: "video",
+        inline_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4",
+        supports_range: true,
+        reason: null,
+        source_label: "server_disk",
+        cache: {
+          status: "not_cached_until_playback",
+          policy: "max_artifact_bytes:5368709120",
+          max_artifact_bytes: 5368709120
+        }
+      }
     },
     {
       artifact_id: "publish_reel_01_mp4",
@@ -120,7 +147,20 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_01_mp4",
       role: "vertical_reel_mp4",
       is_primary: true,
-      stage: "publish.prepare_package"
+      stage: "publish.prepare_package",
+      playback: {
+        mode: "download_only",
+        media_type: "video",
+        inline_url: null,
+        supports_range: false,
+        reason: "artifact_exceeds_media_cache_limit",
+        source_label: "server_disk",
+        cache: {
+          status: "bypass_over_limit",
+          policy: "artifact_size_over_limit:1048576",
+          max_artifact_bytes: 1048576
+        }
+      }
     }
   ];
   const publish = {
@@ -215,10 +255,10 @@ test("operator sees primary publish package downloads", async ({ page }) => {
     "src",
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4"
   );
-  await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveAttribute(
-    "src",
-    "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_01_mp4"
-  );
+  await expect(page.getByTestId("publish-video-cache-status-publish_full_episode_mp4")).toContainText("cache po pierwszym starcie");
+  await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveCount(0);
+  await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("Tylko download");
+  await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("1.0 MB");
   await expect(page.getByTestId("publish-primary-downloads").getByRole("link", { name: /brush-song.zip/i })).toHaveAttribute(
     "href",
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip"
