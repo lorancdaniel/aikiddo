@@ -858,6 +858,74 @@ def render_full_episode_video_assets(job_dir: pathlib.Path, render_plan: dict[st
     return descriptors, logs
 
 
+def scene_start_seconds(video_scenes: dict[str, Any]) -> dict[str, int]:
+    starts: dict[str, int] = {}
+    elapsed = 0
+    for clip in video_scenes.get("clips", []):
+        if not isinstance(clip, dict):
+            continue
+        for key in ("scene_id", "id"):
+            scene_id = clip.get(key)
+            if scene_id:
+                starts[str(scene_id)] = elapsed
+        elapsed += max(1, int(clip.get("duration_seconds") or 4))
+    return starts
+
+
+def render_reel_video_assets(job_dir: pathlib.Path, manifest: dict[str, Any], reels_payload: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], list[str]]:
+    ffmpeg = ffmpeg_command()
+    full_episode_path = find_upstream_artifact_path(manifest, stage="render.full_episode", artifact_id="full_episode_mp4")
+    if not full_episode_path.exists():
+        raise WorkerConfigurationError(f"Full episode MP4 does not exist: {full_episode_path}")
+    video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
+    starts = scene_start_seconds(video_scenes)
+    reels = reels_payload.get("reels", [])
+    if not isinstance(reels, list) or not reels:
+        raise WorkerConfigurationError("render.reels requires at least one reel in reels.json.")
+
+    descriptors: list[tuple[str, str, str, str]] = []
+    logs: list[str] = []
+    vertical_filter = (
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,setsar=1,format=yuv420p"
+    )
+    for index, reel in enumerate(reels, start=1):
+        if not isinstance(reel, dict):
+            raise WorkerConfigurationError("render.reels entries must be JSON objects.")
+        source_scene_ids = reel.get("source_scene_ids", [])
+        start_seconds = 0
+        if isinstance(source_scene_ids, list) and source_scene_ids:
+            start_seconds = starts.get(str(source_scene_ids[0]), 0)
+        duration_seconds = max(1, int(reel.get("duration_seconds") or 8))
+        output_rel = pathlib.Path(str(reel.get("output_path") or f"renders/{reels_payload.get('episode_slug', 'episode')}/reel-{index:02d}.mp4"))
+        output_path = job_dir / output_rel
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            ffmpeg,
+            "-y",
+            "-ss",
+            str(start_seconds),
+            "-t",
+            str(duration_seconds),
+            "-i",
+            str(full_episode_path),
+            "-vf",
+            vertical_filter,
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_rel),
+        ]
+        try:
+            subprocess.run(command, cwd=job_dir, text=True, capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise WorkerConfigurationError(f"FFmpeg reel render failed: {(exc.stderr or exc.stdout or str(exc))[:500]}") from exc
+        descriptors.append((f"reel_{index:02d}_mp4", "reel_video", str(output_rel), "video/mp4"))
+        logs.append(f"Rendered reel MP4: {output_rel}")
+    return descriptors, logs
+
+
 def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
@@ -1374,6 +1442,10 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
     if stage == "render.full_episode" and worker_mode() != "deterministic" and isinstance(payloads.get("render_plan.json"), dict):
         rendered_descriptors, render_logs = render_full_episode_video_assets(job_dir, payloads["render_plan.json"])
         descriptors = [*descriptors, *rendered_descriptors]
+    if stage == "render.reels" and worker_mode() != "deterministic" and isinstance(payloads.get("reels.json"), dict):
+        rendered_descriptors, reel_logs = render_reel_video_assets(job_dir, manifest, payloads["reels.json"])
+        descriptors = [*descriptors, *rendered_descriptors]
+        render_logs.extend(reel_logs)
     artifacts = [
         artifact_for(job_dir, manifest=manifest, artifact_id=artifact_id, artifact_type=artifact_type, filename=filename, mime_type=mime_type)
         for artifact_id, artifact_type, filename, mime_type in descriptors

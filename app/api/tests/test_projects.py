@@ -1286,6 +1286,130 @@ def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path:
     assert payloads["reels.json"]["distribution_notes"]
 
 
+def test_aikiddo_worker_renders_reel_mp4_artifacts(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    episode_job_dir = tmp_path / "full_episode_job"
+    episode_job_dir.mkdir(parents=True)
+    (episode_job_dir / "full_episode.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "episode_slug": "brush-song",
+                "duration_seconds": 15,
+                "scene_count": 2,
+                "output_path": "renders/brush-song/full-episode.mp4",
+                "status": "server_render_manifest_ready",
+            }
+        ),
+        encoding="utf-8",
+    )
+    full_episode_mp4 = episode_job_dir / "renders" / "brush-song" / "full-episode.mp4"
+    full_episode_mp4.parent.mkdir(parents=True)
+    full_episode_mp4.write_bytes(b"fake full episode mp4")
+    episode_output_path = episode_job_dir / "output_manifest.json"
+    episode_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(episode_job_dir),
+                "artifacts": [
+                    {"artifact_id": "full_episode_json", "filename": "full_episode.json"},
+                    {"artifact_id": "full_episode_mp4", "filename": "renders/brush-song/full-episode.mp4", "mime_type": "video/mp4"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    video_job_dir = tmp_path / "video_scenes_job"
+    video_job_dir.mkdir()
+    (video_job_dir / "video_scenes.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "clips": [
+                    {"id": "video_scene_01", "scene_id": "scene_01_opening", "duration_seconds": 4},
+                    {"id": "video_scene_02", "scene_id": "scene_02_repeat", "duration_seconds": 5},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    video_output_path = video_job_dir / "output_manifest.json"
+    video_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(video_job_dir),
+                "artifacts": [{"artifact_id": "video_scenes_json", "filename": "video_scenes.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "short-form reels render manifest planner" in instructions
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "status": "draft",
+            "reels": [
+                {
+                    "id": "reel_01",
+                    "source_episode_slug": "brush-song",
+                    "source_scene_ids": ["scene_02_repeat"],
+                    "duration_seconds": 5,
+                    "aspect_ratio": "9:16",
+                    "hook": "Slow repeatable brushing motion.",
+                    "output_path": "renders/brush-song/reel-01.mp4",
+                    "caption": "Practice the motion slowly.",
+                    "safety_note": "Gentle motion only.",
+                }
+            ],
+            "distribution_notes": ["Operator must review captions before publishing."],
+        }
+
+    ffmpeg_calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, text: bool, capture_output: bool, check: bool):
+        ffmpeg_calls.append(command)
+        output_path = Path(cwd) / command[-1]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fake reel mp4")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+
+    job_dir = tmp_path / "reels_job"
+    job_dir.mkdir()
+    artifacts, preview, logs = worker.write_stage_outputs(
+        job_dir,
+        {
+            "job_id": "remote_reels_render",
+            "project_id": "project_reels_render",
+            "stage": "render.reels",
+            "pipeline_context": [
+                {"stage": "render.full_episode", "output_manifest_path": str(episode_output_path)},
+                {"stage": "video.scenes.generate", "output_manifest_path": str(video_output_path)},
+            ],
+        },
+        "render.reels",
+        {"title": "Brush Song", "topic": "tooth brushing", "age_range": "3-5"},
+    )
+
+    artifact_ids = {artifact["artifact_id"] for artifact in artifacts}
+    assert "reel_01_mp4" in artifact_ids
+    assert (job_dir / "renders" / "brush-song" / "reel-01.mp4").read_bytes() == b"fake reel mp4"
+    assert ffmpeg_calls[0][:4] == ["ffmpeg", "-y", "-ss", "4"]
+    assert any("crop=1080:1920" in argument for argument in ffmpeg_calls[0])
+    assert preview["song_plan"]["artifact_count"] == len(artifacts)
+    assert any("Rendered reel MP4" in line for line in logs)
+
+
 def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
     monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
