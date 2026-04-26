@@ -248,6 +248,26 @@ def test_aikiddo_worker_writes_server_output_contract(tmp_path: Path) -> None:
     assert "runner=aikiddo_worker.py" in (job_dir / "worker.log").read_text(encoding="utf-8")
 
 
+def test_aikiddo_worker_smoke_script_runs_full_deterministic_pipeline(tmp_path: Path) -> None:
+    smoke_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker_smoke.py"
+    result = subprocess.run(
+        [sys.executable, str(smoke_path), "--root", str(tmp_path / "smoke")],
+        text=True,
+        capture_output=True,
+        env=deterministic_worker_env(),
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "aikiddo_worker_smoke=ok" in result.stdout
+    assert "publish.prepare_package" in result.stdout
+    publish_manifest = next((tmp_path / "smoke").glob("*/publish_package.json"))
+    assert publish_manifest.exists()
+    publish_payload = json.loads(publish_manifest.read_text(encoding="utf-8"))
+    assert publish_payload["status"] == "ready_for_operator_upload"
+
+
 def test_aikiddo_worker_requires_openai_key_for_production_lyrics(tmp_path: Path) -> None:
     job_dir = tmp_path / "job_requires_provider"
     job_dir.mkdir()

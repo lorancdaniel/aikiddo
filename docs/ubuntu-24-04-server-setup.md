@@ -144,6 +144,14 @@ Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default productio
 
 Do not set `AIKIDDO_WORKER_MODE=deterministic` on the Ubuntu server unless you are deliberately doing a local development smoke test. That mode writes deterministic scaffolding instead of real provider output.
 
+Before adding the real OpenAI key, you can verify the remote worker contract without provider costs:
+
+```bash
+python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke
+```
+
+Expected output includes `aikiddo_worker_smoke=ok` and `final_stage=publish.prepare_package`.
+
 Do not use the old `/api/projects/{project_id}/remote-pilot` path for production work. It is retired and returns `410 Gone`; the app should create generation work through `POST /api/projects/{project_id}/jobs/{stage}` and read progress through job detail, events, logs, and artifacts.
 
 The current server worker is:
@@ -206,16 +214,18 @@ Stack:
 - Frontend: app/web, Next.js, port 3010
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
+- Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
 - Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, keyframes.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API, and audio.generate_or_import uses OpenAI Speech API, when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
 - Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
 1. Inspect the repo and current git status.
 2. Verify Ubuntu dependencies, Python venv, Node.js and npm.
-3. Run backend tests: cd app/api && python3 -m pytest -q
-4. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts, export AIKIDDO_OPENAI_TTS_VOICE=coral, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
-6. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
-7. If asked to make services, create systemd units only after the app works manually.
-8. Report exact commands, ports, and any blockers.
+3. Run worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke
+4. Run backend tests: cd app/api && python3 -m pytest -q
+5. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
+6. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts, export AIKIDDO_OPENAI_TTS_VOICE=coral, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
+7. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
+8. If asked to make services, create systemd units only after the app works manually.
+9. Report exact commands, ports, and any blockers.
 ```
