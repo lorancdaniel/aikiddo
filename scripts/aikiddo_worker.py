@@ -792,6 +792,78 @@ def make_openai_compliance_payload(manifest: dict[str, Any], brief: dict[str, An
     return payload
 
 
+def make_openai_publish_package_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
+    reels = read_upstream_artifact_json(manifest, stage="render.reels", artifact_id="reels_json")
+    compliance_report = read_upstream_artifact_json(
+        manifest,
+        stage="quality.compliance_report",
+        artifact_id="compliance_report_json",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "title",
+            "topic",
+            "age_range",
+            "package_status",
+            "package_path",
+            "episode_output_path",
+            "reel_output_paths",
+            "included_manifests",
+            "publishing_metadata",
+            "operator_checklist",
+        ],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "age_range": {"type": "string"},
+            "package_status": {"type": "string"},
+            "package_path": {"type": "string"},
+            "episode_output_path": {"type": "string"},
+            "reel_output_paths": {"type": "array", "items": {"type": "string"}},
+            "included_manifests": {"type": "array", "items": {"type": "string"}},
+            "publishing_metadata": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            },
+            "operator_checklist": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "full_episode": full_episode,
+            "reels": reels,
+            "compliance_report": compliance_report,
+            "requirements": [
+                "Create a publish package manifest for a human operator handoff.",
+                "Do not upload, submit, schedule, or publish anything.",
+                "Include the full episode output path, every reel output path, and all required upstream manifests.",
+                "Prepare publishing metadata as strings only, suitable for later human review.",
+                "Include an operator checklist for final title, description, thumbnail, made-for-kids setting, and file existence checks.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side publish package manifest planner for Aikiddo.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["age_range"] = str(payload.get("age_range") or brief["age_range"])
+    payload["package_status"] = "ready"
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
@@ -805,6 +877,7 @@ def ensure_stage_can_run(stage: str) -> None:
         "render.full_episode",
         "render.reels",
         "quality.compliance_report",
+        "publish.prepare_package",
     }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
@@ -1003,6 +1076,10 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "publish.prepare_package":
+        if worker_mode() != "deterministic":
+            return [("publish_package_json", "publish_package", "publish_package.json", "application/json")], {
+                "publish_package.json": make_openai_publish_package_payload(manifest, brief),
+            }
         return [
             ("publish_package_json", "publish_package", "publish_package.json", "application/json"),
             ("upload_checklist_txt", "upload_checklist", "upload_checklist.txt", "text/plain"),

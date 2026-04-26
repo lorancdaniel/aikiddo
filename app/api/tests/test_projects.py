@@ -1253,6 +1253,182 @@ def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Pat
     assert payloads["compliance_report.json"]["checks"][3]["status"] == "review"
 
 
+def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    episode_job_dir = tmp_path / "full_episode_job"
+    episode_job_dir.mkdir()
+    (episode_job_dir / "full_episode.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "age_range": "3-5",
+                "episode_slug": "brush-song",
+                "duration_seconds": 15,
+                "scene_count": 3,
+                "output_path": "renders/brush-song/full-episode.mp4",
+                "poster_frame": "video_scene_01",
+                "audio_mix_note": "Use coral voice preview as review audio bed.",
+                "assembly_notes": ["Concatenate approved scene renders in timeline order."],
+                "status": "server_render_manifest_ready",
+            }
+        ),
+        encoding="utf-8",
+    )
+    episode_output_path = episode_job_dir / "output_manifest.json"
+    episode_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(episode_job_dir),
+                "artifacts": [{"artifact_id": "full_episode_json", "filename": "full_episode.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reels_job_dir = tmp_path / "reels_job"
+    reels_job_dir.mkdir()
+    (reels_job_dir / "reels.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "age_range": "3-5",
+                "status": "server_reel_manifests_ready",
+                "reels": [
+                    {
+                        "id": "reel_01",
+                        "source_episode_slug": "brush-song",
+                        "source_scene_ids": ["scene_01_opening", "scene_02_repeat"],
+                        "duration_seconds": 12,
+                        "aspect_ratio": "9:16",
+                        "hook": "A gentle brushing rhythm in one short loop.",
+                        "output_path": "renders/brush-song/reel-01.mp4",
+                        "caption": "Short preschool-safe brushing song excerpt.",
+                        "safety_note": "No fear pressure or rapid flashes.",
+                    }
+                ],
+                "distribution_notes": ["Operator must review captions before publishing."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    reels_output_path = reels_job_dir / "output_manifest.json"
+    reels_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(reels_job_dir),
+                "artifacts": [{"artifact_id": "reels_json", "filename": "reels.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    compliance_job_dir = tmp_path / "compliance_job"
+    compliance_job_dir.mkdir()
+    (compliance_job_dir / "compliance_report.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "age_range": "3-5",
+                "overall_status": "ready_for_human_review",
+                "episode_output_path": "renders/brush-song/full-episode.mp4",
+                "reel_output_paths": ["renders/brush-song/reel-01.mp4"],
+                "checks": [
+                    {
+                        "id": "check_distribution",
+                        "label": "Distribution readiness",
+                        "status": "review",
+                        "evidence": "Operator must review final captions and platform settings.",
+                    }
+                ],
+                "operator_notes": ["Check made-for-kids settings manually on upload."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    compliance_output_path = compliance_job_dir / "output_manifest.json"
+    compliance_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(compliance_job_dir),
+                "artifacts": [{"artifact_id": "compliance_report_json", "filename": "compliance_report.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "publish package manifest planner" in instructions
+        assert "renders/brush-song/full-episode.mp4" in prompt
+        assert "renders/brush-song/reel-01.mp4" in prompt
+        assert "Do not upload, submit, schedule, or publish anything." in prompt
+        assert schema["required"] == [
+            "title",
+            "topic",
+            "age_range",
+            "package_status",
+            "package_path",
+            "episode_output_path",
+            "reel_output_paths",
+            "included_manifests",
+            "publishing_metadata",
+            "operator_checklist",
+        ]
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "package_status": "draft",
+            "package_path": "publish/brush-song",
+            "episode_output_path": "renders/brush-song/full-episode.mp4",
+            "reel_output_paths": ["renders/brush-song/reel-01.mp4"],
+            "included_manifests": ["full_episode.json", "reels.json", "compliance_report.json"],
+            "publishing_metadata": {
+                "title": "Brush Song",
+                "audience": "3-5",
+                "topic": "tooth brushing",
+                "made_for_kids": "true",
+            },
+            "operator_checklist": [
+                "Verify final rendered files exist on the server.",
+                "Review title, description, thumbnail, and made-for-kids setting.",
+                "Keep compliance report in the package before upload.",
+            ],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "publish.prepare_package",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_publish_provider",
+            "project_id": "project_publish_provider",
+            "stage": "publish.prepare_package",
+            "pipeline_context": [
+                {"stage": "render.full_episode", "output_manifest_path": str(episode_output_path)},
+                {"stage": "render.reels", "output_manifest_path": str(reels_output_path)},
+                {"stage": "quality.compliance_report", "output_manifest_path": str(compliance_output_path)},
+            ],
+        },
+    )
+
+    assert descriptors == [("publish_package_json", "publish_package", "publish_package.json", "application/json")]
+    assert payloads["publish_package.json"]["package_status"] == "ready"
+    assert payloads["publish_package.json"]["package_path"] == "publish/brush-song"
+    assert payloads["publish_package.json"]["episode_output_path"] == "renders/brush-song/full-episode.mp4"
+    assert payloads["publish_package.json"]["reel_output_paths"] == ["renders/brush-song/reel-01.mp4"]
+    assert "compliance_report.json" in payloads["publish_package.json"]["included_manifests"]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [
