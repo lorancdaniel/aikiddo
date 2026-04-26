@@ -372,6 +372,122 @@ def test_aikiddo_worker_uses_openai_speech_for_audio_stage(tmp_path: Path, monke
     assert payloads["audio_plan.json"]["voice"] == "coral"
 
 
+def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    lyrics_job_dir = tmp_path / "lyrics_job"
+    lyrics_job_dir.mkdir()
+    (lyrics_job_dir / "lyrics.txt").write_text("Brush, brush, smile bright.\n", encoding="utf-8")
+    lyrics_output_path = lyrics_job_dir / "output_manifest.json"
+    lyrics_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(lyrics_job_dir),
+                "artifacts": [{"artifact_id": "lyrics_txt", "filename": "lyrics.txt"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    character_job_dir = tmp_path / "character_job"
+    character_job_dir.mkdir()
+    (character_job_dir / "character_bible.json").write_text(
+        json.dumps({"characters": ["brush_friend_v1"], "visual_style": "soft 2D", "continuity_rules": ["same palette"]}),
+        encoding="utf-8",
+    )
+    character_output_path = character_job_dir / "output_manifest.json"
+    character_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(character_job_dir),
+                "artifacts": [{"artifact_id": "character_bible_json", "filename": "character_bible.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audio_job_dir = tmp_path / "audio_job"
+    audio_job_dir.mkdir()
+    (audio_job_dir / "audio_plan.json").write_text(
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready"}),
+        encoding="utf-8",
+    )
+    audio_output_path = audio_job_dir / "output_manifest.json"
+    audio_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(audio_job_dir),
+                "artifacts": [{"artifact_id": "audio_plan_json", "filename": "audio_plan.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "storyboard planner" in instructions
+        assert "Brush, brush" in prompt
+        assert "brush_friend_v1" in prompt
+        assert schema["properties"]["scenes"]["minItems"] == 3
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "scenes": [
+                {
+                    "id": "scene_01_opening",
+                    "duration_seconds": 12,
+                    "action": "Brush friend waves beside the sink.",
+                    "visual_prompt": "soft 2D bathroom classroom, brush_friend_v1 waving",
+                    "lyric_reference": "Brush, brush",
+                    "safety_note": "No unsafe bathroom climbing.",
+                },
+                {
+                    "id": "scene_02_repeat",
+                    "duration_seconds": 16,
+                    "action": "Children repeat the brushing motion slowly.",
+                    "visual_prompt": "preschool-safe slow brushing gesture",
+                    "lyric_reference": "smile bright",
+                    "safety_note": "Gentle motion only.",
+                },
+                {
+                    "id": "scene_03_close",
+                    "duration_seconds": 12,
+                    "action": "Brush friend smiles at a clean sink.",
+                    "visual_prompt": "calm closing shot with bright sink",
+                    "lyric_reference": "smile bright",
+                    "safety_note": "No product claims.",
+                },
+            ],
+            "safety_checks": ["no fear pressure", "no unsafe imitation", "no rapid flashes"],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "storyboard.generate",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_storyboard_provider",
+            "project_id": "project_storyboard_provider",
+            "stage": "storyboard.generate",
+            "pipeline_context": [
+                {"stage": "lyrics.generate", "output_manifest_path": str(lyrics_output_path)},
+                {"stage": "characters.import_or_approve", "output_manifest_path": str(character_output_path)},
+                {"stage": "audio.generate_or_import", "output_manifest_path": str(audio_output_path)},
+            ],
+        },
+    )
+
+    assert descriptors == [("storyboard_json", "storyboard", "storyboard.json", "application/json")]
+    assert payloads["storyboard.json"]["scenes"][0]["id"] == "scene_01_opening"
+    assert payloads["storyboard.json"]["safety_checks"] == ["no fear pressure", "no unsafe imitation", "no rapid flashes"]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [

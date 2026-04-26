@@ -199,7 +199,7 @@ def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
         raise WorkerConfigurationError(f"OpenAI speech generation failed: {exc.reason}") from exc
 
 
-def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> str:
+def find_upstream_artifact_path(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> pathlib.Path:
     for upstream in manifest.get("pipeline_context", []):
         if upstream.get("stage") != stage:
             continue
@@ -213,9 +213,19 @@ def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifac
         remote_job_dir = pathlib.Path(str(output_manifest.get("remote_job_dir", output_manifest_file.parent)))
         for artifact in output_manifest.get("artifacts", []):
             if artifact.get("artifact_id") == artifact_id:
-                artifact_path = remote_job_dir / str(artifact["filename"])
-                return artifact_path.read_text(encoding="utf-8")
+                return remote_job_dir / str(artifact["filename"])
     raise WorkerConfigurationError(f"Required upstream artifact {stage}/{artifact_id} is missing.")
+
+
+def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> str:
+    return find_upstream_artifact_path(manifest, stage=stage, artifact_id=artifact_id).read_text(encoding="utf-8")
+
+
+def read_upstream_artifact_json(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> dict[str, Any]:
+    payload = json.loads(find_upstream_artifact_path(manifest, stage=stage, artifact_id=artifact_id).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise WorkerConfigurationError(f"Required upstream artifact {stage}/{artifact_id} must be a JSON object.")
+    return payload
 
 
 def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -348,10 +358,73 @@ def make_openai_audio_payload(manifest: dict[str, Any], brief: dict[str, Any]) -
     return audio_plan, audio_bytes
 
 
+def make_openai_storyboard_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    lyrics = read_upstream_artifact_text(manifest, stage="lyrics.generate", artifact_id="lyrics_txt")
+    character_bible = read_upstream_artifact_json(manifest, stage="characters.import_or_approve", artifact_id="character_bible_json")
+    audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "topic", "age_range", "scenes", "safety_checks"],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "age_range": {"type": "string"},
+            "scenes": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "duration_seconds", "action", "visual_prompt", "lyric_reference", "safety_note"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "duration_seconds": {"type": "integer"},
+                        "action": {"type": "string"},
+                        "visual_prompt": {"type": "string"},
+                        "lyric_reference": {"type": "string"},
+                        "safety_note": {"type": "string"},
+                    },
+                },
+            },
+            "safety_checks": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "lyrics": lyrics,
+            "character_bible": character_bible,
+            "audio_plan": audio_plan,
+            "requirements": [
+                "Create a timed preschool-safe storyboard for an AI music video.",
+                "Keep actions easy to inspect by a human reviewer.",
+                "Reference lyrics without inventing unsafe actions.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side storyboard planner for Aikiddo kids music videos.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["age_range"] = str(payload.get("age_range") or brief["age_range"])
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
-    if stage not in {"lyrics.generate", "characters.import_or_approve", "audio.generate_or_import"}:
+    if stage not in {"lyrics.generate", "characters.import_or_approve", "audio.generate_or_import", "storyboard.generate"}:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
             "Set AIKIDDO_WORKER_MODE=deterministic only for local development."
@@ -442,20 +515,23 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "storyboard.generate":
-        scenes = [
-            {"id": "scene_01_opening", "duration_seconds": 12, "action": f"Introduce {topic} with a calm visual rhythm."},
-            {"id": "scene_02_discovery", "duration_seconds": 16, "action": "Show one learnable idea and invite repetition."},
-            {"id": "scene_03_repeat", "duration_seconds": 18, "action": "Return to the chorus with gentle movement."},
-            {"id": "scene_04_resolution", "duration_seconds": 14, "action": "Close the story without a cliffhanger."},
-        ]
-        return [("storyboard_json", "storyboard", "storyboard.json", "application/json")], {
-            "storyboard.json": {
+        if worker_mode() == "deterministic":
+            storyboard = {
                 "title": title,
                 "topic": topic,
                 "age_range": age_range,
-                "scenes": scenes,
+                "scenes": [
+                    {"id": "scene_01_opening", "duration_seconds": 12, "action": f"Introduce {topic} with a calm visual rhythm."},
+                    {"id": "scene_02_discovery", "duration_seconds": 16, "action": "Show one learnable idea and invite repetition."},
+                    {"id": "scene_03_repeat", "duration_seconds": 18, "action": "Return to the chorus with gentle movement."},
+                    {"id": "scene_04_resolution", "duration_seconds": 14, "action": "Close the story without a cliffhanger."},
+                ],
                 "safety_checks": ["no fear pressure", "no unsafe imitation", "no rapid flashes"],
-            },
+            }
+        else:
+            storyboard = make_openai_storyboard_payload(manifest, brief)
+        return [("storyboard_json", "storyboard", "storyboard.json", "application/json")], {
+            "storyboard.json": storyboard,
         }
 
     if stage == "keyframes.generate":
