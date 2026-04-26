@@ -1,4 +1,6 @@
 from pathlib import Path
+import hashlib
+import json
 import os
 import secrets
 from uuid import uuid4
@@ -39,6 +41,7 @@ from .models import (
     PublishJobSummary,
     PublishPackageArtifact,
     ReelsArtifact,
+    RemotePilotRun,
     ServerProfile,
     ServerProfileInput,
     STAGE_DISPLAY_CATALOG,
@@ -59,6 +62,114 @@ from .models import (
 )
 from .ssh_generation import SshGenerationServer
 from .storage import ProjectStorage
+
+
+def is_media_artifact(artifact: GenerationArtifact) -> bool:
+    return artifact.mime_type.startswith(("video/", "audio/"))
+
+
+def media_cache_path(storage: ProjectStorage, artifact: GenerationArtifact) -> Path:
+    return storage.studio_dir / "media-cache" / "blobs" / artifact.sha256[:2] / f"{artifact.sha256}.bin"
+
+
+def safe_cache_component(value: str) -> str:
+    return "".join(character if character.isalnum() or character in {"-", "_", "."} else "_" for character in value)
+
+
+def media_cache_index_path(storage: ProjectStorage, *, project_id: str, job_id: str, artifact_id: str) -> Path:
+    return (
+        storage.studio_dir
+        / "media-cache"
+        / "index"
+        / safe_cache_component(project_id)
+        / safe_cache_component(job_id)
+        / f"{safe_cache_component(artifact_id)}.json"
+    )
+
+
+def cache_index_matches(index_path: Path, artifact: GenerationArtifact, cache_path: Path) -> bool:
+    if not index_path.exists() or not cache_path.exists() or cache_path.stat().st_size != artifact.size_bytes:
+        return False
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return (
+        index.get("sha256") == artifact.sha256
+        and index.get("size_bytes") == artifact.size_bytes
+        and index.get("mime_type") == artifact.mime_type
+        and index.get("cache_blob") == str(cache_path.relative_to(media_cache_root_for_index(index_path)))
+    )
+
+
+def media_cache_root_for_index(index_path: Path) -> Path:
+    return index_path.parents[3]
+
+
+def write_media_cache_index(storage: ProjectStorage, run: RemotePilotRun, artifact: GenerationArtifact, cache_path: Path) -> None:
+    index_path = media_cache_index_path(storage, project_id=run.project_id, job_id=run.id, artifact_id=artifact.artifact_id)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_tmp_path = index_path.with_name(f"{index_path.name}.{uuid4().hex}.tmp")
+    index_tmp_path.write_text(
+        json.dumps(
+            {
+                "project_id": run.project_id,
+                "job_id": run.id,
+                "artifact_id": artifact.artifact_id,
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+                "mime_type": artifact.mime_type,
+                "cache_blob": str(cache_path.relative_to(storage.studio_dir / "media-cache")),
+                "source_storage_key": artifact.storage_key,
+                "verified_at": utc_now(),
+                "status": "verified_cached",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    os.replace(index_tmp_path, index_path)
+
+
+def ensure_media_cache_file(
+    *,
+    storage: ProjectStorage,
+    ssh_server: SshGenerationServer,
+    profile: ServerProfile,
+    run: RemotePilotRun,
+    artifact: GenerationArtifact,
+) -> tuple[Path, bool]:
+    cache_path = media_cache_path(storage, artifact)
+    index_path = media_cache_index_path(storage, project_id=run.project_id, job_id=run.id, artifact_id=artifact.artifact_id)
+    if cache_index_matches(index_path, artifact, cache_path):
+        return cache_path, True
+    if index_path.exists():
+        index_path.unlink()
+    if cache_path.exists():
+        cache_valid = cache_path.stat().st_size == artifact.size_bytes and hashlib.sha256(cache_path.read_bytes()).hexdigest() == artifact.sha256
+        if cache_valid:
+            write_media_cache_index(storage, run, artifact, cache_path)
+            return cache_path, True
+        cache_path.unlink()
+    fetched_artifact, content = ssh_server.fetch_artifact(profile, run, artifact.artifact_id)
+    if fetched_artifact.sha256 != artifact.sha256:
+        raise ValueError(artifact.artifact_id)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_name(f"{cache_path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_bytes(content)
+    if tmp_path.stat().st_size != artifact.size_bytes or hashlib.sha256(tmp_path.read_bytes()).hexdigest() != artifact.sha256:
+        tmp_path.unlink(missing_ok=True)
+        raise ValueError(artifact.artifact_id)
+    os.replace(tmp_path, cache_path)
+    write_media_cache_index(storage, run, artifact, cache_path)
+    return cache_path, False
+
+
+def read_file_range(file_path: Path, *, start: int, length: int) -> bytes:
+    with file_path.open("rb") as handle:
+        handle.seek(start)
+        return handle.read(length)
 
 
 def parse_http_byte_range(range_header: str, total_size: int) -> tuple[int, int] | None:
@@ -831,35 +942,68 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         profile = storage.get_server_profile()
         if profile is None or profile.mode != "ssh":
             raise HTTPException(status_code=409, detail="SSH server profile is required to read server artifacts")
-        artifact_for_range = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
-        if range_header is not None and artifact_for_range is None:
+        requested_artifact = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
+        if requested_artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found")
-        if range_header is not None and artifact_for_range is not None and artifact_for_range.mime_type.startswith(("video/", "audio/")):
-            requested_range = parse_http_byte_range(range_header, artifact_for_range.size_bytes)
+        if range_header is not None and is_media_artifact(requested_artifact):
+            requested_range = parse_http_byte_range(range_header, requested_artifact.size_bytes)
             if requested_range is None:
                 return Response(
                     status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                    headers={"Content-Range": f"bytes */{artifact_for_range.size_bytes}", "Accept-Ranges": "bytes"},
+                    headers={"Content-Range": f"bytes */{requested_artifact.size_bytes}", "Accept-Ranges": "bytes"},
                 )
             start, end = requested_range
             content_length = end - start + 1
             try:
-                content = ssh_server.fetch_artifact_range(profile, run, artifact_for_range, start=start, length=content_length)
+                cache_path, cache_hit = ensure_media_cache_file(
+                    storage=storage,
+                    ssh_server=ssh_server,
+                    profile=profile,
+                    run=run,
+                    artifact=requested_artifact,
+                )
             except FileNotFoundError:
                 raise HTTPException(status_code=404, detail="Artifact not found") from None
             except ValueError:
                 raise HTTPException(status_code=416, detail="Invalid artifact range") from None
-            content_disposition = "inline" if artifact_for_range.mime_type.startswith(("video/", "audio/")) else "attachment"
-            download_filename = Path(artifact_for_range.filename).name
+            content = read_file_range(cache_path, start=start, length=content_length)
+            if len(content) != content_length:
+                raise HTTPException(status_code=416, detail="Invalid artifact range")
+            download_filename = Path(requested_artifact.filename).name
             return Response(
                 content=content,
-                media_type=artifact_for_range.mime_type,
+                media_type=requested_artifact.mime_type,
                 status_code=status.HTTP_206_PARTIAL_CONTENT,
                 headers={
                     "Accept-Ranges": "bytes",
-                    "Content-Range": f"bytes {start}-{end}/{artifact_for_range.size_bytes}",
+                    "Content-Range": f"bytes {start}-{end}/{requested_artifact.size_bytes}",
                     "Content-Length": str(content_length),
-                    "Content-Disposition": f'{content_disposition}; filename="{download_filename}"',
+                    "Content-Disposition": f'inline; filename="{download_filename}"',
+                    "X-Artifact-Cache": "hit" if cache_hit else "miss",
+                },
+            )
+        if is_media_artifact(requested_artifact):
+            try:
+                cache_path, cache_hit = ensure_media_cache_file(
+                    storage=storage,
+                    ssh_server=ssh_server,
+                    profile=profile,
+                    run=run,
+                    artifact=requested_artifact,
+                )
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Artifact not found") from None
+            except ValueError:
+                raise HTTPException(status_code=502, detail="Artifact checksum mismatch") from None
+            content = cache_path.read_bytes()
+            return Response(
+                content=content,
+                media_type=requested_artifact.mime_type,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Disposition": f'inline; filename="{Path(requested_artifact.filename).name}"',
+                    "X-Artifact-SHA256": requested_artifact.sha256,
+                    "X-Artifact-Cache": "hit" if cache_hit else "miss",
                 },
             )
         try:

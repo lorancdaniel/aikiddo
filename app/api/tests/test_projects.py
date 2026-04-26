@@ -3581,18 +3581,18 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
         encoding="utf-8",
     )
 
+    ssh_fetches: list[str] = []
+
     class Completed:
-        def __init__(self, stdout: bytes) -> None:
-            self.returncode = 0
-            self.stdout = stdout
-            self.stderr = b""
+        returncode = 0
+        stdout = mp4_content
+        stderr = b""
 
     def fake_run(command, *, capture_output=None, timeout=None, check=None):
         script = command[-1]
-        assert script.startswith("dd ")
-        start = int(script.split(" skip=", 1)[1].split(" ", 1)[0])
-        length = int(script.split(" count=", 1)[1].split(" ", 1)[0])
-        return Completed(mp4_content[start : start + length])
+        assert script.startswith("cat ")
+        ssh_fetches.append(script)
+        return Completed()
 
     monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
 
@@ -3620,6 +3620,25 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
     assert suffix_response.headers["content-range"] == "bytes 12-15/16"
     assert invalid_response.status_code == 416
     assert invalid_response.headers["content-range"] == "bytes */16"
+    assert len(ssh_fetches) == 1
+    media_cache_dir = tmp_path / "projects" / ".studio" / "media-cache"
+    cache_path = media_cache_dir / "blobs" / artifact["sha256"][:2] / f"{artifact['sha256']}.bin"
+    index_path = media_cache_dir / "index" / project["id"] / job_id / "publish_full_episode_mp4.json"
+    assert cache_path.read_bytes() == mp4_content
+    cache_index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert cache_index["cache_blob"] == f"blobs/{artifact['sha256'][:2]}/{artifact['sha256']}.bin"
+    assert cache_index["status"] == "verified_cached"
+
+    cache_path.write_bytes(b"corrupt")
+    rebuilt_response = client.get(
+        f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert rebuilt_response.status_code == 206
+    assert rebuilt_response.content == b"0123"
+    assert len(ssh_fetches) == 2
+    assert cache_path.read_bytes() == mp4_content
 
 
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:
