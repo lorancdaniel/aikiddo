@@ -581,6 +581,66 @@ def make_openai_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, 
     return payload
 
 
+def make_openai_full_episode_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
+    audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "title",
+            "episode_slug",
+            "duration_seconds",
+            "scene_count",
+            "output_path",
+            "poster_frame",
+            "audio_mix_note",
+            "assembly_notes",
+            "status",
+        ],
+        "properties": {
+            "title": {"type": "string"},
+            "episode_slug": {"type": "string"},
+            "duration_seconds": {"type": "integer"},
+            "scene_count": {"type": "integer"},
+            "output_path": {"type": "string"},
+            "poster_frame": {"type": "string"},
+            "audio_mix_note": {"type": "string"},
+            "assembly_notes": {"type": "array", "items": {"type": "string"}},
+            "status": {"type": "string"},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "video_scenes": video_scenes,
+            "audio_plan": audio_plan,
+            "requirements": [
+                "Create a server render manifest for assembling one full episode from scene plans.",
+                "Do not claim that the MP4 has already been rendered.",
+                "Use a stable output_path under renders/<episode_slug>/full-episode.mp4.",
+                "Set scene_count from the scene plan and duration_seconds from the planned clips.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side full episode render manifest planner for Aikiddo.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["episode_slug"] = str(payload.get("episode_slug") or slugify(brief["title"]) or "episode")
+    payload["output_path"] = str(payload.get("output_path") or f"renders/{payload['episode_slug']}/full-episode.mp4")
+    payload["status"] = "server_render_manifest_ready"
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
@@ -591,6 +651,7 @@ def ensure_stage_can_run(stage: str) -> None:
         "storyboard.generate",
         "keyframes.generate",
         "video.scenes.generate",
+        "render.full_episode",
     }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
@@ -738,6 +799,10 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "render.full_episode":
+        if worker_mode() != "deterministic":
+            return [("full_episode_json", "full_episode", "full_episode.json", "application/json")], {
+                "full_episode.json": make_openai_full_episode_payload(manifest, brief),
+            }
         return [
             ("full_episode_json", "full_episode", "full_episode.json", "application/json"),
             ("full_episode_placeholder_txt", "render_placeholder", "full_episode_placeholder.txt", "text/plain"),

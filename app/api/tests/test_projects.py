@@ -786,6 +786,144 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
     assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_id"] == "keyframe_01"
 
 
+def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    audio_job_dir = tmp_path / "audio_job"
+    audio_job_dir.mkdir()
+    (audio_job_dir / "audio_plan.json").write_text(
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "coral"}),
+        encoding="utf-8",
+    )
+    audio_output_path = audio_job_dir / "output_manifest.json"
+    audio_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(audio_job_dir),
+                "artifacts": [{"artifact_id": "audio_plan_json", "filename": "audio_plan.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    video_job_dir = tmp_path / "video_scenes_job"
+    video_job_dir.mkdir()
+    (video_job_dir / "video_scenes.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "render_policy": "server-owned scene files",
+                "status": "ready_for_scene_review",
+                "clips": [
+                    {
+                        "id": "video_scene_01",
+                        "source_keyframe_id": "keyframe_01",
+                        "scene_id": "scene_01_opening",
+                        "duration_seconds": 4,
+                        "motion_prompt": "small friendly wave, no sudden motion",
+                        "camera_motion": "locked gentle push-in",
+                        "transition": "soft dissolve",
+                        "render_notes": "render from approved keyframe",
+                        "safety_note": "no climbing or rapid flashes",
+                    },
+                    {
+                        "id": "video_scene_02",
+                        "source_keyframe_id": "keyframe_02",
+                        "scene_id": "scene_02_repeat",
+                        "duration_seconds": 5,
+                        "motion_prompt": "slow brushing gesture loop",
+                        "camera_motion": "static medium shot",
+                        "transition": "straight cut",
+                        "render_notes": "keep character proportions stable",
+                        "safety_note": "gentle motion only",
+                    },
+                    {
+                        "id": "video_scene_03",
+                        "source_keyframe_id": "keyframe_03",
+                        "scene_id": "scene_03_close",
+                        "duration_seconds": 6,
+                        "motion_prompt": "character smiles near the clean sink",
+                        "camera_motion": "no camera movement",
+                        "transition": "soft fade",
+                        "render_notes": "prepare for human review",
+                        "safety_note": "no product claims",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    video_output_path = video_job_dir / "output_manifest.json"
+    video_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(video_job_dir),
+                "artifacts": [{"artifact_id": "video_scenes_json", "filename": "video_scenes.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "full episode render manifest planner" in instructions
+        assert "video_scene_01" in prompt
+        assert "audio_preview_ready" in prompt
+        assert "Do not claim that the MP4 has already been rendered." in prompt
+        assert schema["required"] == [
+            "title",
+            "episode_slug",
+            "duration_seconds",
+            "scene_count",
+            "output_path",
+            "poster_frame",
+            "audio_mix_note",
+            "assembly_notes",
+            "status",
+        ]
+        return {
+            "title": "Brush Song",
+            "episode_slug": "brush-song",
+            "duration_seconds": 15,
+            "scene_count": 3,
+            "output_path": "renders/brush-song/full-episode.mp4",
+            "poster_frame": "video_scene_01",
+            "audio_mix_note": "Use coral voice preview as review audio bed.",
+            "assembly_notes": [
+                "Concatenate approved scene renders in timeline order.",
+                "Apply gentle loudness normalization before review export.",
+            ],
+            "status": "draft",
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "render.full_episode",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_full_episode_provider",
+            "project_id": "project_full_episode_provider",
+            "stage": "render.full_episode",
+            "pipeline_context": [
+                {"stage": "audio.generate_or_import", "output_manifest_path": str(audio_output_path)},
+                {"stage": "video.scenes.generate", "output_manifest_path": str(video_output_path)},
+            ],
+        },
+    )
+
+    assert descriptors == [("full_episode_json", "full_episode", "full_episode.json", "application/json")]
+    assert payloads["full_episode.json"]["duration_seconds"] == 15
+    assert payloads["full_episode.json"]["scene_count"] == 3
+    assert payloads["full_episode.json"]["status"] == "server_render_manifest_ready"
+    assert payloads["full_episode.json"]["output_path"] == "renders/brush-song/full-episode.mp4"
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [
