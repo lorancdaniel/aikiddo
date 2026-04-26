@@ -1,5 +1,6 @@
 from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -40,6 +41,9 @@ from .models import (
     LocalModelStatus,
     LyricsArtifact,
     PIPELINE_STAGES,
+    PlaybackVerificationInput,
+    PlaybackVerificationRecord,
+    PlaybackVerificationResult,
     Project,
     ProjectNextAction,
     ProjectSeriesLinkInput,
@@ -105,6 +109,29 @@ def media_cache_policy_for(artifact: GenerationArtifact) -> tuple[bool, str]:
     if artifact.size_bytes > max_artifact_bytes:
         return False, f"artifact_size_over_limit:{max_artifact_bytes}"
     return True, f"max_artifact_bytes:{max_artifact_bytes}"
+
+
+def artifact_snapshot(artifact: GenerationArtifact) -> dict:
+    return {
+        "artifact_id": artifact.artifact_id,
+        "sha256": artifact.sha256,
+        "size_bytes": artifact.size_bytes,
+        "mime_type": artifact.mime_type,
+        "filename": artifact.filename,
+        "storage_key": artifact.storage_key,
+    }
+
+
+def verification_matches_artifact(verification: dict, artifact: GenerationArtifact) -> bool:
+    snapshot = verification.get("artifact_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    return (
+        snapshot.get("artifact_id") == artifact.artifact_id
+        and snapshot.get("sha256") == artifact.sha256
+        and snapshot.get("size_bytes") == artifact.size_bytes
+        and snapshot.get("storage_key") == artifact.storage_key
+    )
 
 
 def media_cache_path(storage: ProjectStorage, artifact: GenerationArtifact) -> Path:
@@ -1144,6 +1171,82 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             },
         )
 
+    @app.post("/api/jobs/{job_id}/artifacts/{artifact_id}/playback-verifications", response_model=PlaybackVerificationResult)
+    def record_playback_verification(
+        job_id: str,
+        artifact_id: str,
+        verification_input: PlaybackVerificationInput,
+    ) -> PlaybackVerificationResult:
+        job = storage.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        run = storage.get_remote_pilot_run(job.project_id, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Remote job not found")
+        artifact = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        playback = build_artifact_playback(job, artifact, download_url=f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}")
+        if playback is None or playback.mode != "streamable":
+            raise HTTPException(status_code=409, detail="Artifact is not streamable through browser playback")
+
+        accept_ranges = verification_input.headers.accept_ranges or ""
+        content_range = verification_input.headers.content_range or ""
+        failure_reason = verification_input.error
+        is_verified = (
+            verification_input.source == "browser_range_get"
+            and verification_input.method == "GET"
+            and verification_input.range == "bytes=0-0"
+            and verification_input.http_status == status.HTTP_206_PARTIAL_CONTENT
+            and content_range.startswith("bytes 0-0/")
+            and "bytes" in accept_ranges.lower()
+            and verification_input.body_bytes_read == 1
+        )
+        if not is_verified and failure_reason is None:
+            if verification_input.http_status != status.HTTP_206_PARTIAL_CONTENT:
+                failure_reason = f"Range check expected 206, got {verification_input.http_status}"
+            elif not content_range.startswith("bytes 0-0/"):
+                failure_reason = "Range check returned invalid Content-Range"
+            elif "bytes" not in accept_ranges.lower():
+                failure_reason = "Range check missing Accept-Ranges: bytes"
+            elif verification_input.body_bytes_read != 1:
+                failure_reason = f"Range check read {verification_input.body_bytes_read} bytes"
+            else:
+                failure_reason = "Range check failed"
+
+        checked_at = utc_now()
+        verification = PlaybackVerificationRecord(
+            id=f"pv_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}_{secrets.token_hex(4)}",
+            status="verified" if is_verified else "failed",
+            source=verification_input.source,
+            checked_at=checked_at,
+            http_status=verification_input.http_status,
+            range=verification_input.range,
+            content_range=verification_input.headers.content_range,
+            accept_ranges=verification_input.headers.accept_ranges,
+            body_bytes_read=verification_input.body_bytes_read,
+            cache={
+                "header": verification_input.headers.x_artifact_cache,
+                "policy": verification_input.headers.x_artifact_cache_policy,
+            },
+            duration_ms=verification_input.duration_ms,
+            failure_reason=None if is_verified else failure_reason,
+            stale=False,
+        )
+        storage.append_job_event(
+            job,
+            "playback_verification_recorded",
+            f"Playback verification {'passed' if is_verified else 'failed'} for {artifact.artifact_id}.",
+            data={
+                "artifact_id": artifact.artifact_id,
+                "verification": verification.model_dump(mode="json"),
+                "artifact_snapshot": artifact_snapshot(artifact),
+                "client_checked_at": verification_input.client_checked_at,
+                "client_verdict": verification_input.client_verdict,
+            },
+        )
+        return PlaybackVerificationResult(verification=verification)
+
     @app.post("/api/projects/{project_id}/stages/{stage}/approve", response_model=Project)
     def approve_stage(project_id: str, stage: str, approval_input: StageApprovalInput) -> Project:
         if stage not in PIPELINE_STAGES:
@@ -1201,6 +1304,27 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             playback=playback,
         )
 
+    def latest_playback_verification(job: Job, artifact: GenerationArtifact) -> PlaybackVerificationRecord:
+        latest: PlaybackVerificationRecord | None = None
+        latest_stale: PlaybackVerificationRecord | None = None
+        for event in storage.list_job_events(job.id):
+            if event.event != "playback_verification_recorded":
+                continue
+            if event.data.get("artifact_id") != artifact.artifact_id:
+                continue
+            verification_data = event.data.get("verification")
+            if not isinstance(verification_data, dict):
+                continue
+            try:
+                verification = PlaybackVerificationRecord.model_validate(verification_data)
+            except ValueError:
+                continue
+            if verification_matches_artifact(event.data, artifact):
+                latest = verification
+            else:
+                latest_stale = verification.model_copy(update={"stale": True})
+        return latest or latest_stale or PlaybackVerificationRecord(id="not_checked", status="not_checked")
+
     def build_artifact_playback(job: Job, artifact: GenerationArtifact, *, download_url: str) -> GenerationArtifactPlayback | None:
         if not is_media_artifact(artifact):
             return None
@@ -1220,6 +1344,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
                     policy=cache_policy,
                     max_artifact_bytes=max_artifact_bytes,
                 ),
+                verification=latest_playback_verification(job, artifact),
             )
 
         cache_status = "not_cached_until_playback"
@@ -1237,6 +1362,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
                 policy=cache_policy,
                 max_artifact_bytes=max_artifact_bytes,
             ),
+            verification=latest_playback_verification(job, artifact),
         )
 
     def build_publish_summary(job: Job, artifacts: list[GenerationArtifactView]) -> PublishJobSummary | None:

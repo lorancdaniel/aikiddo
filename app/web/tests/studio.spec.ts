@@ -90,6 +90,21 @@ test("operator sees primary publish package downloads", async ({ page }) => {
           status: "not_cached_until_playback",
           policy: "max_artifact_bytes:5368709120",
           max_artifact_bytes: 5368709120
+        },
+        verification: {
+          id: "not_checked",
+          status: "not_checked",
+          source: "browser_range_get",
+          checked_at: null,
+          http_status: null,
+          range: null,
+          content_range: null,
+          accept_ranges: null,
+          body_bytes_read: null,
+          cache: { header: null, policy: null },
+          duration_ms: null,
+          failure_reason: null,
+          stale: false
         }
       }
     },
@@ -132,6 +147,21 @@ test("operator sees primary publish package downloads", async ({ page }) => {
           status: "not_cached_until_playback",
           policy: "max_artifact_bytes:5368709120",
           max_artifact_bytes: 5368709120
+        },
+        verification: {
+          id: "not_checked",
+          status: "not_checked",
+          source: "browser_range_get",
+          checked_at: null,
+          http_status: null,
+          range: null,
+          content_range: null,
+          accept_ranges: null,
+          body_bytes_read: null,
+          cache: { header: null, policy: null },
+          duration_ms: null,
+          failure_reason: null,
+          stale: false
         }
       }
     },
@@ -159,6 +189,21 @@ test("operator sees primary publish package downloads", async ({ page }) => {
           status: "bypass_over_limit",
           policy: "artifact_size_over_limit:1048576",
           max_artifact_bytes: 1048576
+        },
+        verification: {
+          id: "not_checked",
+          status: "not_checked",
+          source: "browser_range_get",
+          checked_at: null,
+          http_status: null,
+          range: null,
+          content_range: null,
+          accept_ranges: null,
+          body_bytes_read: null,
+          cache: { header: null, policy: null },
+          duration_ms: null,
+          failure_reason: null,
+          stale: false
         }
       }
     }
@@ -219,6 +264,47 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       });
     }
     if (path === "/api/jobs/job_publish/events") return json([]);
+    if (path === "/api/jobs/job_publish/artifacts/publish_full_episode_mp4/playback-verifications") {
+      const payload = route.request().postDataJSON();
+      expect(payload.http_status).toBe(206);
+      expect(payload.range).toBe("bytes=0-0");
+      expect(payload.headers.content_range).toBe("bytes 0-0/10485760");
+      const verifiedArtifact = artifacts.find((artifact) => artifact.artifact_id === "publish_full_episode_mp4") as { playback?: { verification: unknown } } | undefined;
+      if (verifiedArtifact?.playback) {
+        verifiedArtifact.playback.verification = {
+          id: "pv_test",
+          status: "verified",
+          source: "browser_range_get",
+          checked_at: now,
+          http_status: 206,
+          range: "bytes=0-0",
+          content_range: "bytes 0-0/10485760",
+          accept_ranges: "bytes",
+          body_bytes_read: 1,
+          cache: { header: "hit", policy: "max_artifact_bytes:5368709120" },
+          duration_ms: 24,
+          failure_reason: null,
+          stale: false
+        };
+      }
+      return json({
+        verification: {
+          id: "pv_test",
+          status: "verified",
+          source: "browser_range_get",
+          checked_at: now,
+          http_status: 206,
+          range: "bytes=0-0",
+          content_range: "bytes 0-0/10485760",
+          accept_ranges: "bytes",
+          body_bytes_read: 1,
+          cache: { header: "hit", policy: "max_artifact_bytes:5368709120" },
+          duration_ms: 24,
+          failure_reason: null,
+          stale: false
+        }
+      });
+    }
     if (path === "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4") {
       const range = route.request().headers()["range"];
       if (range !== "bytes=0-0") return route.fulfill({ status: 400, body: "Expected playback probe range" });
@@ -276,6 +362,8 @@ test("operator sees primary publish package downloads", async ({ page }) => {
   await page.getByTestId("publish-video-verify-button-publish_full_episode_mp4").click();
   await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("Zweryfikowano");
   await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("cache: hit");
+  await page.reload();
+  await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("Zweryfikowano");
   await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveCount(0);
   await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("Tylko download");
   await expect(page.getByTestId("publish-video-verify-button-publish_reel_01_mp4")).toHaveCount(0);

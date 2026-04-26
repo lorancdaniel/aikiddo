@@ -3618,10 +3618,54 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
         f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
         headers={"Origin": "http://localhost:3000", "Range": "bytes=0-0"},
     )
+    verification_response = client.post(
+        f"/api/jobs/{job_id}/artifacts/publish_full_episode_mp4/playback-verifications",
+        json={
+            "source": "browser_range_get",
+            "method": "GET",
+            "range": "bytes=0-0",
+            "http_status": 206,
+            "headers": {
+                "content_range": "bytes 0-0/16",
+                "accept_ranges": "bytes",
+                "content_length": "1",
+                "x_artifact_cache": "hit",
+                "x_artifact_cache_policy": "max_artifact_bytes:5368709120",
+            },
+            "body_bytes_read": 1,
+            "duration_ms": 42,
+            "client_checked_at": now,
+            "client_verdict": "verified",
+            "error": None,
+        },
+    )
     invalid_response = client.get(
         f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
         headers={"Range": "bytes=99-120"},
     )
+    spoofed_verification_response = client.post(
+        f"/api/jobs/{job_id}/artifacts/publish_full_episode_mp4/playback-verifications",
+        json={
+            "source": "browser_range_get",
+            "method": "GET",
+            "range": "bytes=0-0",
+            "http_status": 200,
+            "headers": {
+                "content_range": None,
+                "accept_ranges": None,
+                "content_length": "16",
+                "x_artifact_cache": "hit",
+                "x_artifact_cache_policy": "max_artifact_bytes:5368709120",
+            },
+            "body_bytes_read": 0,
+            "duration_ms": 10,
+            "client_checked_at": now,
+            "client_verdict": "verified",
+            "error": None,
+        },
+    )
+    detail_response = client.get(f"/api/jobs/{job_id}")
+    events_response = client.get(f"/api/jobs/{job_id}/events")
 
     assert response.status_code == 206
     assert response.content == b"456789"
@@ -3640,6 +3684,20 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
     assert playback_probe_response.headers["x-artifact-cache"] == "hit"
     assert "Content-Range" in playback_probe_response.headers["access-control-expose-headers"]
     assert "X-Artifact-Cache-Policy" in playback_probe_response.headers["access-control-expose-headers"]
+    assert verification_response.status_code == 200
+    assert verification_response.json()["verification"]["status"] == "verified"
+    assert verification_response.json()["verification"]["cache"]["header"] == "hit"
+    assert spoofed_verification_response.status_code == 200
+    assert spoofed_verification_response.json()["verification"]["status"] == "failed"
+    assert "expected 206" in spoofed_verification_response.json()["verification"]["failure_reason"]
+    detail = detail_response.json()
+    playback_verification = detail["artifacts"][0]["playback"]["verification"]
+    assert playback_verification["status"] == "failed"
+    assert playback_verification["http_status"] == 200
+    events = events_response.json()
+    assert [event["event"] for event in events].count("playback_verification_recorded") == 2
+    assert events[-1]["data"]["artifact_id"] == "publish_full_episode_mp4"
+    assert events[-1]["data"]["verification"]["status"] == "failed"
     assert invalid_response.status_code == 416
     assert invalid_response.headers["content-range"] == "bytes */16"
     assert len(ssh_fetches) == 1
@@ -3766,6 +3824,27 @@ def test_video_job_artifact_over_cache_limit_bypasses_cache_and_blocks_range(tmp
     )
     detail = client.get(f"/api/jobs/{job_id}").json()
     playback = detail["artifacts"][0]["playback"]
+    verification_response = client.post(
+        f"/api/jobs/{job_id}/artifacts/publish_full_episode_mp4/playback-verifications",
+        json={
+            "source": "browser_range_get",
+            "method": "GET",
+            "range": "bytes=0-0",
+            "http_status": 409,
+            "headers": {
+                "content_range": None,
+                "accept_ranges": "none",
+                "content_length": None,
+                "x_artifact_cache": "bypass",
+                "x_artifact_cache_policy": "artifact_size_over_limit:8",
+            },
+            "body_bytes_read": 0,
+            "duration_ms": 12,
+            "client_checked_at": now,
+            "client_verdict": "failed",
+            "error": "Artifact is download-only",
+        },
+    )
 
     assert full_response.status_code == 200
     assert full_response.content == mp4_content
@@ -3778,6 +3857,7 @@ def test_video_job_artifact_over_cache_limit_bypasses_cache_and_blocks_range(tmp
     assert playback["cache"]["status"] == "bypass_over_limit"
     assert playback["cache"]["policy"] == "artifact_size_over_limit:8"
     assert playback["cache"]["max_artifact_bytes"] == 8
+    assert verification_response.status_code == 409
     assert range_response.status_code == 409
     assert range_response.json()["detail"] == {
         "error": "artifact_range_unavailable",

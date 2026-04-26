@@ -521,6 +521,52 @@ class GenerationArtifactPlaybackCache(BaseModel):
     max_artifact_bytes: int
 
 
+class PlaybackVerificationCache(BaseModel):
+    header: str | None = None
+    policy: str | None = None
+
+
+class PlaybackVerificationRecord(BaseModel):
+    id: str
+    status: Literal["not_checked", "verified", "failed"]
+    source: Literal["browser_range_get"] = "browser_range_get"
+    checked_at: str | None = None
+    http_status: int | None = None
+    range: str | None = None
+    content_range: str | None = None
+    accept_ranges: str | None = None
+    body_bytes_read: int | None = None
+    cache: PlaybackVerificationCache = Field(default_factory=PlaybackVerificationCache)
+    duration_ms: int | None = None
+    failure_reason: str | None = None
+    stale: bool = False
+
+
+class PlaybackVerificationHeaders(BaseModel):
+    content_range: str | None = None
+    accept_ranges: str | None = None
+    content_length: str | None = None
+    x_artifact_cache: str | None = None
+    x_artifact_cache_policy: str | None = None
+
+
+class PlaybackVerificationInput(BaseModel):
+    source: Literal["browser_range_get"]
+    method: Literal["GET"]
+    range: str
+    http_status: int | None = None
+    headers: PlaybackVerificationHeaders = Field(default_factory=PlaybackVerificationHeaders)
+    body_bytes_read: int = 0
+    duration_ms: int | None = Field(default=None, ge=0)
+    client_checked_at: str | None = None
+    client_verdict: Literal["verified", "failed"] | None = None
+    error: str | None = None
+
+
+class PlaybackVerificationResult(BaseModel):
+    verification: PlaybackVerificationRecord
+
+
 class GenerationArtifactPlayback(BaseModel):
     mode: Literal["streamable", "download_only", "unavailable"]
     media_type: Literal["video", "audio"]
@@ -529,6 +575,9 @@ class GenerationArtifactPlayback(BaseModel):
     reason: str | None = None
     source_label: Literal["server_disk"] = "server_disk"
     cache: GenerationArtifactPlaybackCache
+    verification: PlaybackVerificationRecord = Field(
+        default_factory=lambda: PlaybackVerificationRecord(id="not_checked", status="not_checked")
+    )
 
 
 class GenerationArtifactView(GenerationArtifact):
@@ -571,6 +620,7 @@ class JobEvent(BaseModel):
     event: str
     message: str
     created_at: str
+    data: dict = Field(default_factory=dict)
 
 
 class DispatchNextInput(BaseModel):

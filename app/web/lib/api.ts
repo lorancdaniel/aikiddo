@@ -235,6 +235,45 @@ export type GenerationArtifactPlayback = {
     policy: string;
     max_artifact_bytes: number;
   };
+  verification: PlaybackVerificationRecord;
+};
+
+export type PlaybackVerificationRecord = {
+  id: string;
+  status: "not_checked" | "verified" | "failed";
+  source: "browser_range_get";
+  checked_at: string | null;
+  http_status: number | null;
+  range: string | null;
+  content_range: string | null;
+  accept_ranges: string | null;
+  body_bytes_read: number | null;
+  cache: {
+    header: string | null;
+    policy: string | null;
+  };
+  duration_ms: number | null;
+  failure_reason: string | null;
+  stale: boolean;
+};
+
+export type PlaybackVerificationInput = {
+  source: "browser_range_get";
+  method: "GET";
+  range: string;
+  http_status: number | null;
+  headers: {
+    content_range: string | null;
+    accept_ranges: string | null;
+    content_length: string | null;
+    x_artifact_cache: string | null;
+    x_artifact_cache_policy: string | null;
+  };
+  body_bytes_read: number;
+  duration_ms: number | null;
+  client_checked_at: string | null;
+  client_verdict: "verified" | "failed";
+  error: string | null;
 };
 
 export type GenerationArtifactView = GenerationArtifact & {
@@ -304,6 +343,7 @@ export type JobEvent = {
   event: string;
   message: string;
   created_at: string;
+  data: Record<string, unknown>;
 };
 
 export type WorkerQueueStatus = {
@@ -640,6 +680,13 @@ export function retryJob(jobId: string) {
 
 export function fetchJobEvents(jobId: string, after = 0) {
   return request<JobEvent[]>(`/api/jobs/${jobId}/events?after=${after}`);
+}
+
+export function recordPlaybackVerification(jobId: string, artifactId: string, input: PlaybackVerificationInput) {
+  return request<{ verification: PlaybackVerificationRecord }>(`/api/jobs/${jobId}/artifacts/${artifactId}/playback-verifications`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
 
 export function fetchSshQueueStatus() {

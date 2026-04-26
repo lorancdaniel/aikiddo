@@ -54,6 +54,7 @@ import {
   ProjectInput,
   ProjectNextAction,
   PublishPackageArtifact,
+  recordPlaybackVerification,
   ReelsArtifact,
   retryJob,
   runAntiRepetition,
@@ -144,6 +145,30 @@ function playbackStatusCopy(artifact: GenerationArtifactView) {
   if (artifact.playback.cache.status === "cached") return "Odtwarzanie · zweryfikowany cache";
   if (artifact.playback.cache.status === "not_cached_until_playback") return "Odtwarzanie · cache po pierwszym starcie";
   return "Odtwarzanie niedostępne";
+}
+
+function playbackVerificationFromArtifact(artifact: GenerationArtifactView): PlaybackVerifyState {
+  const verification = artifact.playback?.verification;
+  if (!verification || verification.status === "not_checked") return { status: "idle" };
+  if (verification.status === "verified") {
+    return {
+      status: "verified",
+      checkedAt: verification.checked_at ?? "",
+      httpStatus: verification.http_status ?? 206,
+      cache: verification.cache.header,
+      cachePolicy: verification.cache.policy,
+      contentRange: verification.content_range
+    };
+  }
+  return {
+    status: "failed",
+    checkedAt: verification.checked_at ?? "",
+    httpStatus: verification.http_status ?? undefined,
+    error: verification.stale ? "Poprzednia weryfikacja jest nieaktualna" : verification.failure_reason ?? "Nie udało się zweryfikować playbacku",
+    cache: verification.cache.header,
+    cachePolicy: verification.cache.policy,
+    contentRange: verification.content_range
+  };
 }
 
 type PlaybackVerifyState =
@@ -417,6 +442,19 @@ export default function Home() {
     return serverJobDetail.publish.primary_artifacts;
   }, [selectedProject, serverJobDetail?.publish, serverJobDetail?.stage]);
 
+  useEffect(() => {
+    if (!publishPrimaryArtifacts.length) return;
+    setPlaybackVerification((current) => {
+      const next = { ...current };
+      for (const artifact of publishPrimaryArtifacts) {
+        if (!artifact.playback) continue;
+        if (next[artifact.artifact_id]?.status === "checking") continue;
+        next[artifact.artifact_id] = playbackVerificationFromArtifact(artifact);
+      }
+      return next;
+    });
+  }, [publishPrimaryArtifacts]);
+
   const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
 
   function syncStrategyForms(project: Project | null) {
@@ -685,12 +723,14 @@ export default function Home() {
   }
 
   async function handleVerifyPlayback(artifact: GenerationArtifactView, inlineUrl: string) {
+    if (!serverJobDetail) return;
     setPlaybackVerification((current) => ({
       ...current,
       [artifact.artifact_id]: { status: "checking" }
     }));
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    const startedAt = window.performance.now();
     try {
       const response = await fetch(inlineUrl, {
         method: "GET",
@@ -702,35 +742,116 @@ export default function Home() {
       const cachePolicy = response.headers.get("X-Artifact-Cache-Policy");
       const contentRange = response.headers.get("Content-Range");
       const acceptRanges = response.headers.get("Accept-Ranges");
+      const contentLength = response.headers.get("Content-Length");
       const checkedAt = new Date().toISOString();
       if (response.status !== 206) {
         await response.body?.cancel();
-        throw { httpStatus: response.status, error: `HTTP ${response.status}: Range nie zwrócił 206`, cache, cachePolicy, contentRange };
+        throw { httpStatus: response.status, error: `HTTP ${response.status}: Range nie zwrócił 206`, cache, cachePolicy, contentRange, acceptRanges, contentLength, bodyBytesRead: 0 };
       }
       if (!contentRange?.startsWith("bytes 0-0/")) {
         await response.body?.cancel();
-        throw { httpStatus: response.status, error: "Nieprawidłowy Content-Range", cache, cachePolicy, contentRange };
+        throw { httpStatus: response.status, error: "Nieprawidłowy Content-Range", cache, cachePolicy, contentRange, acceptRanges, contentLength, bodyBytesRead: 0 };
       }
       if (!acceptRanges?.toLowerCase().includes("bytes")) {
         await response.body?.cancel();
-        throw { httpStatus: response.status, error: "Brak Accept-Ranges: bytes", cache, cachePolicy, contentRange };
+        throw { httpStatus: response.status, error: "Brak Accept-Ranges: bytes", cache, cachePolicy, contentRange, acceptRanges, contentLength, bodyBytesRead: 0 };
       }
       const payload = await response.arrayBuffer();
       if (payload.byteLength !== 1) {
-        throw { httpStatus: response.status, error: `Nieprawidłowa długość odpowiedzi: ${payload.byteLength} B`, cache, cachePolicy, contentRange };
+        throw {
+          httpStatus: response.status,
+          error: `Nieprawidłowa długość odpowiedzi: ${payload.byteLength} B`,
+          cache,
+          cachePolicy,
+          contentRange,
+          acceptRanges,
+          contentLength,
+          bodyBytesRead: payload.byteLength
+        };
       }
+      const persisted = await recordPlaybackVerification(serverJobDetail.id, artifact.artifact_id, {
+        source: "browser_range_get",
+        method: "GET",
+        range: "bytes=0-0",
+        http_status: response.status,
+        headers: {
+          content_range: contentRange,
+          accept_ranges: acceptRanges,
+          content_length: contentLength,
+          x_artifact_cache: cache,
+          x_artifact_cache_policy: cachePolicy
+        },
+        body_bytes_read: payload.byteLength,
+        duration_ms: Math.round(window.performance.now() - startedAt),
+        client_checked_at: checkedAt,
+        client_verdict: "verified",
+        error: null
+      });
       setPlaybackVerification((current) => ({
         ...current,
-        [artifact.artifact_id]: { status: "verified", checkedAt, httpStatus: response.status, cache, cachePolicy, contentRange }
+        [artifact.artifact_id]: {
+          status: "verified",
+          checkedAt: persisted.verification.checked_at ?? checkedAt,
+          httpStatus: persisted.verification.http_status ?? response.status,
+          cache: persisted.verification.cache.header,
+          cachePolicy: persisted.verification.cache.policy,
+          contentRange: persisted.verification.content_range
+        }
       }));
+      setServerEvents(await fetchJobEvents(serverJobDetail.id));
     } catch (caught) {
       const checkedAt = new Date().toISOString();
       const failure =
         typeof caught === "object" && caught !== null && "error" in caught
-          ? (caught as { httpStatus?: number; error: string; cache?: string | null; cachePolicy?: string | null; contentRange?: string | null })
+          ? (caught as {
+              httpStatus?: number;
+              error: string;
+              cache?: string | null;
+              cachePolicy?: string | null;
+              contentRange?: string | null;
+              acceptRanges?: string | null;
+              contentLength?: string | null;
+              bodyBytesRead?: number;
+            })
           : {
               error: caught instanceof DOMException && caught.name === "AbortError" ? "Timeout sprawdzania odtwarzania" : "Nie udało się sprawdzić odtwarzania"
             };
+      try {
+        const persisted = await recordPlaybackVerification(serverJobDetail.id, artifact.artifact_id, {
+          source: "browser_range_get",
+          method: "GET",
+          range: "bytes=0-0",
+          http_status: failure.httpStatus ?? null,
+          headers: {
+            content_range: failure.contentRange ?? null,
+            accept_ranges: failure.acceptRanges ?? null,
+            content_length: failure.contentLength ?? null,
+            x_artifact_cache: failure.cache ?? null,
+            x_artifact_cache_policy: failure.cachePolicy ?? null
+          },
+          body_bytes_read: failure.bodyBytesRead ?? 0,
+          duration_ms: Math.round(window.performance.now() - startedAt),
+          client_checked_at: checkedAt,
+          client_verdict: "failed",
+          error: failure.error
+        });
+        setPlaybackVerification((current) => ({
+          ...current,
+          [artifact.artifact_id]: {
+            status: "failed",
+            checkedAt: persisted.verification.checked_at ?? checkedAt,
+            httpStatus: persisted.verification.http_status ?? failure.httpStatus,
+            error: persisted.verification.failure_reason ?? failure.error,
+            cache: persisted.verification.cache.header,
+            cachePolicy: persisted.verification.cache.policy,
+            contentRange: persisted.verification.content_range
+          }
+        }));
+        setServerEvents(await fetchJobEvents(serverJobDetail.id));
+        return;
+      } catch {
+        setError("Nie udało się zapisać audytu weryfikacji playbacku.");
+      }
       setPlaybackVerification((current) => ({
         ...current,
         [artifact.artifact_id]: { status: "failed", checkedAt, ...failure }

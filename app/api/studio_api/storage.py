@@ -118,7 +118,7 @@ class ProjectStorage:
     def job_events_file(self, job: Job) -> Path:
         return self.project_dir(job.project_id) / "jobs" / f"{job.id}.events.jsonl"
 
-    def append_job_event(self, job: Job, event: str, message: str) -> JobEvent:
+    def append_job_event(self, job: Job, event: str, message: str, data: dict | None = None) -> JobEvent:
         events = self.list_job_events(job.id)
         job_event = JobEvent(
             cursor=len(events) + 1,
@@ -126,6 +126,7 @@ class ProjectStorage:
             event=event,
             message=message,
             created_at=utc_now(),
+            data=data or {},
         )
         events_file = self.job_events_file(job)
         events_file.parent.mkdir(parents=True, exist_ok=True)
