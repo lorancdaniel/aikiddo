@@ -618,6 +618,14 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "Accept-Ranges",
+            "Content-Length",
+            "Content-Range",
+            "X-Artifact-Cache",
+            "X-Artifact-Cache-Policy",
+            "X-Artifact-SHA256",
+        ],
     )
 
     @app.get("/health")

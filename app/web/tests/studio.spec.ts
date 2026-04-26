@@ -219,6 +219,23 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       });
     }
     if (path === "/api/jobs/job_publish/events") return json([]);
+    if (path === "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4") {
+      const range = route.request().headers()["range"];
+      if (range !== "bytes=0-0") return route.fulfill({ status: 400, body: "Expected playback probe range" });
+      return route.fulfill({
+        status: 206,
+        body: "0",
+        contentType: "video/mp4",
+        headers: {
+          "Accept-Ranges": "bytes",
+          "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, X-Artifact-Cache, X-Artifact-Cache-Policy",
+          "Content-Length": "1",
+          "Content-Range": "bytes 0-0/10485760",
+          "X-Artifact-Cache": "hit",
+          "X-Artifact-Cache-Policy": "max_artifact_bytes:5368709120"
+        }
+      });
+    }
     if (path === "/api/projects/project_publish/jobs/job_publish/artifacts") return json(artifacts);
     if (path === "/api/projects/project_publish/jobs/job_publish/log") return json({ job_id: "job_publish", log: "ready", lines: ["ready"] });
     if (path === "/api/projects/project_publish/artifacts/publish-package") {
@@ -256,8 +273,12 @@ test("operator sees primary publish package downloads", async ({ page }) => {
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4"
   );
   await expect(page.getByTestId("publish-video-cache-status-publish_full_episode_mp4")).toContainText("cache po pierwszym starcie");
+  await page.getByTestId("publish-video-verify-button-publish_full_episode_mp4").click();
+  await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("Zweryfikowano");
+  await expect(page.getByTestId("publish-video-verify-status-publish_full_episode_mp4")).toContainText("cache: hit");
   await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveCount(0);
   await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("Tylko download");
+  await expect(page.getByTestId("publish-video-verify-button-publish_reel_01_mp4")).toHaveCount(0);
   await expect(page.getByTestId("publish-video-download-only-publish_reel_01_mp4")).toContainText("1.0 MB");
   await expect(page.getByTestId("publish-primary-downloads").getByRole("link", { name: /brush-song.zip/i })).toHaveAttribute(
     "href",

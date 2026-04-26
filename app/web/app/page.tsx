@@ -146,6 +146,27 @@ function playbackStatusCopy(artifact: GenerationArtifactView) {
   return "Odtwarzanie niedostępne";
 }
 
+type PlaybackVerifyState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | {
+      status: "verified";
+      checkedAt: string;
+      httpStatus: number;
+      cache: string | null;
+      cachePolicy: string | null;
+      contentRange: string | null;
+    }
+  | {
+      status: "failed";
+      checkedAt: string;
+      httpStatus?: number;
+      error: string;
+      cache?: string | null;
+      cachePolicy?: string | null;
+      contentRange?: string | null;
+    };
+
 function getStageStatus(project: Project | null, stage: string) {
   return project?.pipeline.find((item) => item.stage === stage)?.status;
 }
@@ -237,6 +258,7 @@ export default function Home() {
   const [serverEvents, setServerEvents] = useState<JobEvent[]>([]);
   const [queueStatus, setQueueStatus] = useState<WorkerQueueStatus | null>(null);
   const [artifactPreview, setArtifactPreview] = useState<{ artifactId: string; content: string } | null>(null);
+  const [playbackVerification, setPlaybackVerification] = useState<Record<string, PlaybackVerifyState>>({});
   const [artifactInventory, setArtifactInventory] = useState<ArtifactInventoryItem[]>([]);
   const [projectJobs, setProjectJobs] = useState<Job[]>([]);
   const [stageApprovals, setStageApprovals] = useState<StageApproval[]>([]);
@@ -659,6 +681,62 @@ export default function Home() {
       setArtifactPreview({ artifactId: artifact.artifact_id, content });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się pobrać artefaktu z serwera.");
+    }
+  }
+
+  async function handleVerifyPlayback(artifact: GenerationArtifactView, inlineUrl: string) {
+    setPlaybackVerification((current) => ({
+      ...current,
+      [artifact.artifact_id]: { status: "checking" }
+    }));
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(inlineUrl, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        credentials: "include",
+        signal: controller.signal
+      });
+      const cache = response.headers.get("X-Artifact-Cache");
+      const cachePolicy = response.headers.get("X-Artifact-Cache-Policy");
+      const contentRange = response.headers.get("Content-Range");
+      const acceptRanges = response.headers.get("Accept-Ranges");
+      const checkedAt = new Date().toISOString();
+      if (response.status !== 206) {
+        await response.body?.cancel();
+        throw { httpStatus: response.status, error: `HTTP ${response.status}: Range nie zwrócił 206`, cache, cachePolicy, contentRange };
+      }
+      if (!contentRange?.startsWith("bytes 0-0/")) {
+        await response.body?.cancel();
+        throw { httpStatus: response.status, error: "Nieprawidłowy Content-Range", cache, cachePolicy, contentRange };
+      }
+      if (!acceptRanges?.toLowerCase().includes("bytes")) {
+        await response.body?.cancel();
+        throw { httpStatus: response.status, error: "Brak Accept-Ranges: bytes", cache, cachePolicy, contentRange };
+      }
+      const payload = await response.arrayBuffer();
+      if (payload.byteLength !== 1) {
+        throw { httpStatus: response.status, error: `Nieprawidłowa długość odpowiedzi: ${payload.byteLength} B`, cache, cachePolicy, contentRange };
+      }
+      setPlaybackVerification((current) => ({
+        ...current,
+        [artifact.artifact_id]: { status: "verified", checkedAt, httpStatus: response.status, cache, cachePolicy, contentRange }
+      }));
+    } catch (caught) {
+      const checkedAt = new Date().toISOString();
+      const failure =
+        typeof caught === "object" && caught !== null && "error" in caught
+          ? (caught as { httpStatus?: number; error: string; cache?: string | null; cachePolicy?: string | null; contentRange?: string | null })
+          : {
+              error: caught instanceof DOMException && caught.name === "AbortError" ? "Timeout sprawdzania odtwarzania" : "Nie udało się sprawdzić odtwarzania"
+            };
+      setPlaybackVerification((current) => ({
+        ...current,
+        [artifact.artifact_id]: { status: "failed", checkedAt, ...failure }
+      }));
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
 
@@ -1591,6 +1669,7 @@ export default function Home() {
                     const canStreamVideo =
                       isVideo && (!artifact.playback || (artifact.playback.mode === "streamable" && Boolean(artifact.playback.inline_url)));
                     const videoUrl = artifact.playback?.inline_url ? buildApiUrl(artifact.playback.inline_url) : downloadUrl;
+                    const verifyState = playbackVerification[artifact.artifact_id] ?? { status: "idle" };
                     return (
                       <div
                         key={artifact.artifact_id}
@@ -1625,15 +1704,44 @@ export default function Home() {
                             />
                             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-white/7 px-3 py-2 text-xs font-bold text-white/54">
                               <span data-testid={`publish-video-cache-status-${artifact.artifact_id}`}>{playbackStatusCopy(artifact)}</span>
-                              <a
-                                className="rounded-full bg-white px-3 py-1 text-[var(--ink)] transition hover:scale-[1.03]"
-                                href={downloadUrl}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                Download
-                              </a>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-white transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-55"
+                                  data-testid={`publish-video-verify-button-${artifact.artifact_id}`}
+                                  disabled={verifyState.status === "checking"}
+                                  onClick={() => handleVerifyPlayback(artifact, videoUrl)}
+                                  type="button"
+                                >
+                                  {verifyState.status === "checking" ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
+                                  {verifyState.status === "checking" ? "Sprawdzam" : "Sprawdź odtwarzanie"}
+                                </button>
+                                <a
+                                  className="rounded-full bg-white px-3 py-1 text-[var(--ink)] transition hover:scale-[1.03]"
+                                  href={downloadUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Download
+                                </a>
+                              </div>
                             </div>
+                            {verifyState.status === "verified" ? (
+                              <div
+                                className="flex flex-wrap items-center gap-2 border-t border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-100"
+                                data-testid={`publish-video-verify-status-${artifact.artifact_id}`}
+                              >
+                                <CheckCircle2 size={14} />
+                                <span>Zweryfikowano · cache: {verifyState.cache ?? "unknown"} · {verifyState.cachePolicy ?? "policy unknown"}</span>
+                              </div>
+                            ) : verifyState.status === "failed" ? (
+                              <div
+                                className="flex flex-wrap items-center gap-2 border-t border-[var(--coral)]/25 bg-[var(--coral)]/12 px-3 py-2 text-xs font-bold text-white"
+                                data-testid={`publish-video-verify-status-${artifact.artifact_id}`}
+                              >
+                                <XCircle size={14} />
+                                <span>Nie zweryfikowano · {verifyState.error}</span>
+                              </div>
+                            ) : null}
                           </div>
                         ) : isVideo ? (
                           <div

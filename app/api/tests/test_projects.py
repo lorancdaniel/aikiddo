@@ -3614,6 +3614,10 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
         f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
         headers={"Range": "bytes=-4"},
     )
+    playback_probe_response = client.get(
+        f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
+        headers={"Origin": "http://localhost:3000", "Range": "bytes=0-0"},
+    )
     invalid_response = client.get(
         f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
         headers={"Range": "bytes=99-120"},
@@ -3629,6 +3633,13 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
     assert suffix_response.content == b"cdef"
     assert suffix_response.headers["content-range"] == "bytes 12-15/16"
     assert suffix_response.headers["x-artifact-cache"] == "hit"
+    assert playback_probe_response.status_code == 206
+    assert playback_probe_response.content == b"0"
+    assert playback_probe_response.headers["content-range"] == "bytes 0-0/16"
+    assert playback_probe_response.headers["content-length"] == "1"
+    assert playback_probe_response.headers["x-artifact-cache"] == "hit"
+    assert "Content-Range" in playback_probe_response.headers["access-control-expose-headers"]
+    assert "X-Artifact-Cache-Policy" in playback_probe_response.headers["access-control-expose-headers"]
     assert invalid_response.status_code == 416
     assert invalid_response.headers["content-range"] == "bytes */16"
     assert len(ssh_fetches) == 1
