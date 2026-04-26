@@ -924,6 +924,180 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
     assert payloads["full_episode.json"]["output_path"] == "renders/brush-song/full-episode.mp4"
 
 
+def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    episode_job_dir = tmp_path / "full_episode_job"
+    episode_job_dir.mkdir()
+    (episode_job_dir / "full_episode.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "age_range": "3-5",
+                "episode_slug": "brush-song",
+                "duration_seconds": 15,
+                "scene_count": 3,
+                "output_path": "renders/brush-song/full-episode.mp4",
+                "poster_frame": "video_scene_01",
+                "audio_mix_note": "Use coral voice preview as review audio bed.",
+                "assembly_notes": ["Concatenate approved scene renders in timeline order."],
+                "status": "server_render_manifest_ready",
+            }
+        ),
+        encoding="utf-8",
+    )
+    episode_output_path = episode_job_dir / "output_manifest.json"
+    episode_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(episode_job_dir),
+                "artifacts": [{"artifact_id": "full_episode_json", "filename": "full_episode.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    video_job_dir = tmp_path / "video_scenes_job"
+    video_job_dir.mkdir()
+    (video_job_dir / "video_scenes.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "render_policy": "server-owned scene files",
+                "status": "ready_for_scene_review",
+                "clips": [
+                    {
+                        "id": "video_scene_01",
+                        "source_keyframe_id": "keyframe_01",
+                        "scene_id": "scene_01_opening",
+                        "duration_seconds": 4,
+                        "motion_prompt": "small friendly wave",
+                        "camera_motion": "locked gentle push-in",
+                        "transition": "soft dissolve",
+                        "render_notes": "render from approved keyframe",
+                        "safety_note": "no climbing",
+                    },
+                    {
+                        "id": "video_scene_02",
+                        "source_keyframe_id": "keyframe_02",
+                        "scene_id": "scene_02_repeat",
+                        "duration_seconds": 5,
+                        "motion_prompt": "slow brushing gesture",
+                        "camera_motion": "static medium shot",
+                        "transition": "straight cut",
+                        "render_notes": "keep proportions stable",
+                        "safety_note": "gentle motion only",
+                    },
+                    {
+                        "id": "video_scene_03",
+                        "source_keyframe_id": "keyframe_03",
+                        "scene_id": "scene_03_close",
+                        "duration_seconds": 6,
+                        "motion_prompt": "character smiles near sink",
+                        "camera_motion": "no camera movement",
+                        "transition": "soft fade",
+                        "render_notes": "prepare for human review",
+                        "safety_note": "no product claims",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    video_output_path = video_job_dir / "output_manifest.json"
+    video_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(video_job_dir),
+                "artifacts": [{"artifact_id": "video_scenes_json", "filename": "video_scenes.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "short-form reels render manifest planner" in instructions
+        assert "renders/brush-song/full-episode.mp4" in prompt
+        assert "video_scene_02" in prompt
+        assert "Do not claim that reel MP4 files have already been rendered." in prompt
+        assert schema["required"] == ["title", "topic", "age_range", "reels", "distribution_notes", "status"]
+        assert schema["properties"]["reels"]["minItems"] == 3
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "status": "draft",
+            "reels": [
+                {
+                    "id": "reel_01",
+                    "source_episode_slug": "brush-song",
+                    "source_scene_ids": ["scene_01_opening", "scene_02_repeat"],
+                    "duration_seconds": 12,
+                    "aspect_ratio": "9:16",
+                    "hook": "A gentle brushing rhythm in one short loop.",
+                    "output_path": "renders/brush-song/reel-01.mp4",
+                    "caption": "Short preschool-safe brushing song excerpt.",
+                    "safety_note": "No fear pressure or rapid flashes.",
+                },
+                {
+                    "id": "reel_02",
+                    "source_episode_slug": "brush-song",
+                    "source_scene_ids": ["scene_02_repeat"],
+                    "duration_seconds": 10,
+                    "aspect_ratio": "9:16",
+                    "hook": "Slow repeatable brushing motion.",
+                    "output_path": "renders/brush-song/reel-02.mp4",
+                    "caption": "Practice the motion slowly.",
+                    "safety_note": "Gentle motion only.",
+                },
+                {
+                    "id": "reel_03",
+                    "source_episode_slug": "brush-song",
+                    "source_scene_ids": ["scene_03_close"],
+                    "duration_seconds": 8,
+                    "aspect_ratio": "9:16",
+                    "hook": "A calm ending without a cliffhanger.",
+                    "output_path": "renders/brush-song/reel-03.mp4",
+                    "caption": "A complete short ending for review.",
+                    "safety_note": "No manipulative watch-more language.",
+                },
+            ],
+            "distribution_notes": [
+                "Keep all short clips in vertical 9:16 format.",
+                "Operator must review captions before publishing.",
+            ],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "render.reels",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_reels_provider",
+            "project_id": "project_reels_provider",
+            "stage": "render.reels",
+            "pipeline_context": [
+                {"stage": "render.full_episode", "output_manifest_path": str(episode_output_path)},
+                {"stage": "video.scenes.generate", "output_manifest_path": str(video_output_path)},
+            ],
+        },
+    )
+
+    assert descriptors == [("reels_json", "reels", "reels.json", "application/json")]
+    assert payloads["reels.json"]["status"] == "server_reel_manifests_ready"
+    assert payloads["reels.json"]["reels"][0]["aspect_ratio"] == "9:16"
+    assert payloads["reels.json"]["reels"][0]["output_path"] == "renders/brush-song/reel-01.mp4"
+    assert payloads["reels.json"]["distribution_notes"]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [

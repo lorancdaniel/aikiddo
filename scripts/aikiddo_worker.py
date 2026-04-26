@@ -641,6 +641,84 @@ def make_openai_full_episode_payload(manifest: dict[str, Any], brief: dict[str, 
     return payload
 
 
+def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
+    video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "topic", "age_range", "reels", "distribution_notes", "status"],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "age_range": {"type": "string"},
+            "reels": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "id",
+                        "source_episode_slug",
+                        "source_scene_ids",
+                        "duration_seconds",
+                        "aspect_ratio",
+                        "hook",
+                        "output_path",
+                        "caption",
+                        "safety_note",
+                    ],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "source_episode_slug": {"type": "string"},
+                        "source_scene_ids": {"type": "array", "items": {"type": "string"}},
+                        "duration_seconds": {"type": "integer"},
+                        "aspect_ratio": {"type": "string"},
+                        "hook": {"type": "string"},
+                        "output_path": {"type": "string"},
+                        "caption": {"type": "string"},
+                        "safety_note": {"type": "string"},
+                    },
+                },
+            },
+            "distribution_notes": {"type": "array", "items": {"type": "string"}},
+            "status": {"type": "string"},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "full_episode": full_episode,
+            "video_scenes": video_scenes,
+            "requirements": [
+                "Create short-form render manifests for vertical clips derived from the full episode.",
+                "Do not claim that reel MP4 files have already been rendered.",
+                "Use vertical 9:16 aspect ratio for every reel.",
+                "Map each reel to one or more source scene ids from the scene plan.",
+                "Keep hooks and captions preschool-safe, non-manipulative, and ready for operator review.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side short-form reels render manifest planner for Aikiddo.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["age_range"] = str(payload.get("age_range") or brief["age_range"])
+    payload["status"] = "server_reel_manifests_ready"
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
@@ -652,6 +730,7 @@ def ensure_stage_can_run(stage: str) -> None:
         "keyframes.generate",
         "video.scenes.generate",
         "render.full_episode",
+        "render.reels",
     }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
@@ -818,6 +897,10 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "render.reels":
+        if worker_mode() != "deterministic":
+            return [("reels_json", "reels", "reels.json", "application/json")], {
+                "reels.json": make_openai_reels_payload(manifest, brief),
+            }
         reels = [
             {"id": "reel_01", "aspect_ratio": "9:16", "duration_seconds": 18, "output_path": f"renders/{episode_slug}/reel-01.mp4"},
             {"id": "reel_02", "aspect_ratio": "9:16", "duration_seconds": 20, "output_path": f"renders/{episode_slug}/reel-02.mp4"},
