@@ -1574,21 +1574,19 @@ export default function Home() {
                 <div className="mt-4 grid grid-flow-dense grid-cols-1 gap-3 md:grid-cols-2" data-testid="publish-primary-downloads">
                   {publishPrimaryArtifacts.map((artifact) => {
                     const isArchive = artifact.role === "publish_package_zip";
+                    const isVideo = artifact.mime_type.startsWith("video/");
                     const downloadUrl =
                       selectedProject && serverJobDetail
                         ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${serverJobDetail.id}/artifacts/${artifact.artifact_id}`)
                         : "";
                     return (
-                      <a
+                      <div
                         key={artifact.artifact_id}
                         className={`group overflow-hidden rounded-2xl border transition duration-500 hover:-translate-y-0.5 ${
                           isArchive
                             ? "border-[var(--acid)]/50 bg-[var(--acid)] p-5 text-[#101200] md:col-span-2"
                             : "border-white/10 bg-white/7 p-4 text-white"
                         }`}
-                        href={downloadUrl}
-                        rel="noreferrer"
-                        target="_blank"
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">
@@ -1604,7 +1602,42 @@ export default function Home() {
                             {isArchive ? <Archive size={18} /> : <Download size={18} />}
                           </span>
                         </div>
-                      </a>
+                        {isVideo ? (
+                          <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black" data-testid={`publish-video-preview-${artifact.artifact_id}`}>
+                            <video
+                              className="aspect-video w-full bg-black"
+                              controls
+                              data-testid={`publish-video-player-${artifact.artifact_id}`}
+                              preload="metadata"
+                              src={downloadUrl}
+                            />
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-white/7 px-3 py-2 text-xs font-bold text-white/54">
+                              <span>Odtwarzanie z dysku serwera</span>
+                              <a
+                                className="rounded-full bg-white px-3 py-1 text-[var(--ink)] transition hover:scale-[1.03]"
+                                href={downloadUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        ) : (
+                          <a
+                            className={`mt-4 inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-black transition hover:scale-[1.03] ${
+                              isArchive ? "bg-[#101200] text-white" : "bg-white text-[var(--ink)]"
+                            }`}
+                            aria-label={`Download ${fileNameFromPath(artifact.filename)}`}
+                            href={downloadUrl}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            <Download size={14} />
+                            Download
+                          </a>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

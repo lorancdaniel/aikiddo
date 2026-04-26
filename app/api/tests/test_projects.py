@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -3388,6 +3389,111 @@ def test_publish_job_detail_returns_backend_owned_primary_artifacts(tmp_path: Pa
     assert detail["publish"]["primary_artifacts"][0]["download_url"].endswith(f"/jobs/{job_id}/artifacts/publish_package_zip")
     assert detail["artifacts"][0]["role"] == "publish_manifest"
     assert detail["artifacts"][0]["is_primary"] is False
+
+
+def test_video_job_artifact_is_served_inline_for_web_playback(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child remembers morning brushing",
+            "characters": [],
+        },
+    ).json()
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    job_id = "remote_video_playback"
+    now = "2026-04-26T12:00:00+00:00"
+    mp4_content = b"fake mp4 bytes for browser playback"
+    artifact = {
+        "artifact_id": "publish_full_episode_mp4",
+        "type": "publish_video",
+        "filename": "publish/brush-song/videos/full-episode.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": len(mp4_content),
+        "sha256": hashlib.sha256(mp4_content).hexdigest(),
+        "storage_key": f"projects/{project['id']}/jobs/{job_id}/publish/brush-song/videos/full-episode.mp4",
+        "public": False,
+    }
+    project_dir = tmp_path / "projects" / project["id"]
+    jobs_dir = project_dir / "jobs"
+    runs_dir = project_dir / "remote-runs"
+    jobs_dir.mkdir(parents=True)
+    runs_dir.mkdir(parents=True)
+    (jobs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "message": "Publish package ready.",
+                "attempt_id": "attempt_video_playback",
+                "failure_reason": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "remote_job_dir": f"/home/daniel/aikiddo-worker/jobs/{job_id}",
+                "job_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/job_manifest.json",
+                "output_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/output_manifest.json",
+                "output_files": [artifact["storage_key"]],
+                "artifacts": [artifact],
+                "preview": None,
+                "message": "Publish package ready.",
+                "logs": ["ready"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Completed:
+        returncode = 0
+        stdout = mp4_content
+        stderr = b""
+
+    def fake_run(command, *, capture_output=None, timeout=None, check=None):
+        assert command[-1].startswith("cat ")
+        assert command[-1].endswith("full-episode.mp4")
+        return Completed()
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    response = client.get(f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4")
+
+    assert response.status_code == 200
+    assert response.content == mp4_content
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["content-disposition"] == 'inline; filename="full-episode.mp4"'
+    assert response.headers["x-artifact-sha256"] == artifact["sha256"]
 
 
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:

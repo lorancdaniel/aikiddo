@@ -805,11 +805,13 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             raise HTTPException(status_code=404, detail="Artifact not found") from None
         except ValueError:
             raise HTTPException(status_code=502, detail="Artifact checksum mismatch") from None
+        content_disposition = "inline" if artifact.mime_type.startswith(("video/", "audio/")) else "attachment"
+        download_filename = Path(artifact.filename).name
         return Response(
             content=content,
             media_type=artifact.mime_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+                "Content-Disposition": f'{content_disposition}; filename="{download_filename}"',
                 "X-Artifact-SHA256": artifact.sha256,
             },
         )

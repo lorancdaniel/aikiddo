@@ -211,6 +211,14 @@ test("operator sees primary publish package downloads", async ({ page }) => {
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("full-episode.mp4");
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("reel-01.mp4");
   await expect(page.getByTestId("publish-primary-downloads")).not.toContainText("old-reel-99.mp4");
+  await expect(page.getByTestId("publish-video-player-publish_full_episode_mp4")).toHaveAttribute(
+    "src",
+    "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4"
+  );
+  await expect(page.getByTestId("publish-video-player-publish_reel_01_mp4")).toHaveAttribute(
+    "src",
+    "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_01_mp4"
+  );
   await expect(page.getByTestId("publish-primary-downloads").getByRole("link", { name: /brush-song.zip/i })).toHaveAttribute(
     "href",
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip"
