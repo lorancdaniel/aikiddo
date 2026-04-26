@@ -1,10 +1,13 @@
 import hashlib
 import json
+from json import JSONDecodeError
 from pathlib import Path
 import shlex
 import subprocess
 from typing import Any
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun, ServerConnection, ServerProfile, utc_now
 
@@ -35,6 +38,71 @@ class SshGenerationServer:
             message = result.stderr.strip() or result.stdout.strip() or "SSH connection failed"
             return ServerConnection(mode="ssh", reachable=False, message=message)
         return ServerConnection(mode="ssh", reachable=True, message=result.stdout.strip())
+
+    def _failed_remote_run(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        stage: str,
+        remote_job_dir: str,
+        job_manifest_path: str,
+        output_manifest_path: str,
+        created_at: str,
+        message: str,
+        logs: list[str] | None = None,
+    ) -> RemotePilotRun:
+        return RemotePilotRun(
+            id=job_id,
+            project_id=project_id,
+            stage=stage,
+            status="failed",
+            adapter="ssh",
+            remote_job_dir=remote_job_dir,
+            job_manifest_path=job_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_files=[],
+            artifacts=[],
+            preview=None,
+            message=message,
+            logs=logs or [message],
+            created_at=created_at,
+            updated_at=utc_now(),
+        )
+
+    def _validate_output_manifest(
+        self,
+        *,
+        output: Any,
+        job_id: str,
+        project_id: str,
+        stage: str,
+    ) -> tuple[list[str], list[GenerationArtifact], GenerationPreview | None, list[str], str]:
+        if not isinstance(output, dict):
+            raise ValueError("Output manifest must be a JSON object.")
+        expected_values = {
+            "schema_version": "output.v1",
+            "job_id": job_id,
+            "project_id": project_id,
+            "stage": stage,
+            "adapter": self.adapter,
+        }
+        for field, expected in expected_values.items():
+            if output.get(field) != expected:
+                raise ValueError(f"Output manifest field {field} does not match this job.")
+        if output.get("status") not in {"completed", "failed"}:
+            raise ValueError("Output manifest status must be completed or failed.")
+        if not isinstance(output.get("output_files"), list):
+            raise ValueError("Output manifest output_files must be a list.")
+        if not isinstance(output.get("artifacts"), list):
+            raise ValueError("Output manifest artifacts must be a list.")
+
+        output_files = [str(path) for path in output["output_files"]]
+        artifacts = [GenerationArtifact.model_validate(artifact) for artifact in output["artifacts"]]
+        preview = GenerationPreview.model_validate(output["preview"]) if output.get("preview") else None
+        logs = [str(line) for line in output.get("logs", []) if str(line).strip()]
+        message = str(output.get("message") or "")
+        return output_files, artifacts, preview, logs, message
 
     def run_remote_job(
         self,
@@ -96,22 +164,16 @@ python3 "$job_dir/aikiddo_worker.py" "$job_dir"
             check=False,
         )
         if script_result.returncode != 0:
-            return RemotePilotRun(
-                id=job_id,
+            return self._failed_remote_run(
+                job_id=job_id,
                 project_id=project_id,
                 stage=stage,
-                status="failed",
-                adapter="ssh",
                 remote_job_dir=remote_job_dir,
                 job_manifest_path=job_manifest_path,
                 output_manifest_path=output_manifest_path,
-                output_files=[],
-                artifacts=[],
-                preview=None,
                 message=script_result.stderr.strip() or "Server worker failed",
                 logs=[line for line in [script_result.stdout.strip(), script_result.stderr.strip()] if line],
                 created_at=now,
-                updated_at=utc_now(),
             )
 
         output_result = subprocess.run(
@@ -121,21 +183,68 @@ python3 "$job_dir/aikiddo_worker.py" "$job_dir"
             timeout=15,
             check=False,
         )
-        output = json.loads(output_result.stdout) if output_result.returncode == 0 else {}
+        if output_result.returncode != 0:
+            message = output_result.stderr.strip() or output_result.stdout.strip() or "Output manifest could not be read."
+            return self._failed_remote_run(
+                job_id=job_id,
+                project_id=project_id,
+                stage=stage,
+                remote_job_dir=remote_job_dir,
+                job_manifest_path=job_manifest_path,
+                output_manifest_path=output_manifest_path,
+                message="Output manifest could not be read.",
+                logs=[line for line in [script_result.stdout.strip(), message] if line],
+                created_at=now,
+            )
+        try:
+            output = json.loads(output_result.stdout)
+        except JSONDecodeError as exc:
+            return self._failed_remote_run(
+                job_id=job_id,
+                project_id=project_id,
+                stage=stage,
+                remote_job_dir=remote_job_dir,
+                job_manifest_path=job_manifest_path,
+                output_manifest_path=output_manifest_path,
+                message="Output manifest is not valid JSON.",
+                logs=[line for line in [script_result.stdout.strip(), str(exc)] if line],
+                created_at=now,
+            )
+        try:
+            output_files, artifacts, preview, logs, worker_message = self._validate_output_manifest(
+                output=output,
+                job_id=job_id,
+                project_id=project_id,
+                stage=stage,
+            )
+        except (ValueError, TypeError, ValidationError) as exc:
+            return self._failed_remote_run(
+                job_id=job_id,
+                project_id=project_id,
+                stage=stage,
+                remote_job_dir=remote_job_dir,
+                job_manifest_path=job_manifest_path,
+                output_manifest_path=output_manifest_path,
+                message="Output manifest failed contract validation.",
+                logs=[line for line in [script_result.stdout.strip(), str(exc)] if line],
+                created_at=now,
+            )
+
+        status = output["status"]
         return RemotePilotRun(
             id=job_id,
             project_id=project_id,
             stage=stage,
-            status=output.get("status", "completed"),
+            status=status,
             adapter="ssh",
             remote_job_dir=output.get("remote_job_dir", remote_job_dir),
             job_manifest_path=job_manifest_path,
             output_manifest_path=output_manifest_path,
-            output_files=output.get("output_files", []),
-            artifacts=[GenerationArtifact.model_validate(artifact) for artifact in output.get("artifacts", [])],
-            preview=GenerationPreview.model_validate(output["preview"]) if output.get("preview") else None,
-            message="Server generation completed.",
-            logs=output.get("logs", [script_result.stdout.strip()]),
+            output_files=output_files,
+            artifacts=artifacts,
+            preview=preview,
+            message=worker_message or ("Server worker reported failure." if status == "failed" else "Server generation completed."),
+            logs=logs or [script_result.stdout.strip()],
             created_at=now,
             updated_at=utc_now(),
         )
