@@ -1741,6 +1741,135 @@ def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path,
     assert "compliance_report.json" in payloads["publish_package.json"]["included_manifests"]
 
 
+def test_aikiddo_worker_prepares_publish_video_asset_artifacts(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    episode_job_dir = tmp_path / "full_episode_job"
+    episode_job_dir.mkdir()
+    (episode_job_dir / "full_episode.json").write_text(
+        json.dumps({"title": "Brush Song", "episode_slug": "brush-song", "output_path": "renders/brush-song/full-episode.mp4"}),
+        encoding="utf-8",
+    )
+    episode_mp4 = episode_job_dir / "renders" / "brush-song" / "full-episode.mp4"
+    episode_mp4.parent.mkdir(parents=True)
+    episode_mp4.write_bytes(b"full episode mp4")
+    episode_output_path = episode_job_dir / "output_manifest.json"
+    episode_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(episode_job_dir),
+                "artifacts": [
+                    {"artifact_id": "full_episode_json", "filename": "full_episode.json"},
+                    {"artifact_id": "full_episode_mp4", "filename": "renders/brush-song/full-episode.mp4", "mime_type": "video/mp4"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reels_job_dir = tmp_path / "reels_job"
+    reels_job_dir.mkdir()
+    (reels_job_dir / "reels.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "status": "server_reel_manifests_ready",
+                "reels": [{"id": "reel_01", "output_path": "renders/brush-song/reel-01.mp4"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    reel_mp4 = reels_job_dir / "renders" / "brush-song" / "reel-01.mp4"
+    reel_mp4.parent.mkdir(parents=True)
+    reel_mp4.write_bytes(b"reel mp4")
+    reels_output_path = reels_job_dir / "output_manifest.json"
+    reels_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(reels_job_dir),
+                "artifacts": [
+                    {"artifact_id": "reels_json", "filename": "reels.json"},
+                    {"artifact_id": "reel_01_mp4", "filename": "renders/brush-song/reel-01.mp4", "mime_type": "video/mp4"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    compliance_job_dir = tmp_path / "compliance_job"
+    compliance_job_dir.mkdir()
+    (compliance_job_dir / "compliance_report.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "overall_status": "ready_for_human_review",
+                "episode_output_path": "renders/brush-song/full-episode.mp4",
+                "reel_output_paths": ["renders/brush-song/reel-01.mp4"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    compliance_output_path = compliance_job_dir / "output_manifest.json"
+    compliance_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(compliance_job_dir),
+                "artifacts": [{"artifact_id": "compliance_report_json", "filename": "compliance_report.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "publish package manifest planner" in instructions
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "package_status": "draft",
+            "package_path": "publish/brush-song",
+            "episode_output_path": "renders/brush-song/full-episode.mp4",
+            "reel_output_paths": ["renders/brush-song/reel-01.mp4"],
+            "included_manifests": ["full_episode.json", "reels.json", "compliance_report.json"],
+            "publishing_metadata": {"made_for_kids": "true"},
+            "operator_checklist": ["Verify final rendered files exist on the server."],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+
+    job_dir = tmp_path / "publish_job"
+    job_dir.mkdir()
+    artifacts, preview, logs = worker.write_stage_outputs(
+        job_dir,
+        {
+            "job_id": "remote_publish_package",
+            "project_id": "project_publish_package",
+            "stage": "publish.prepare_package",
+            "pipeline_context": [
+                {"stage": "render.full_episode", "output_manifest_path": str(episode_output_path)},
+                {"stage": "render.reels", "output_manifest_path": str(reels_output_path)},
+                {"stage": "quality.compliance_report", "output_manifest_path": str(compliance_output_path)},
+            ],
+        },
+        "publish.prepare_package",
+        {"title": "Brush Song", "topic": "tooth brushing", "age_range": "3-5"},
+    )
+
+    artifact_ids = {artifact["artifact_id"] for artifact in artifacts}
+    assert "publish_assets_manifest_json" in artifact_ids
+    assert "publish_full_episode_mp4" in artifact_ids
+    assert "publish_reel_01_mp4" in artifact_ids
+    assert (job_dir / "publish" / "brush-song" / "videos" / "full-episode.mp4").read_bytes() == b"full episode mp4"
+    assert (job_dir / "publish" / "brush-song" / "reels" / "reel-01.mp4").read_bytes() == b"reel mp4"
+    asset_manifest = json.loads((job_dir / "publish_assets_manifest.json").read_text(encoding="utf-8"))
+    assert asset_manifest["assets"][0]["artifact_id"] == "publish_full_episode_mp4"
+    assert asset_manifest["assets"][1]["artifact_id"] == "publish_reel_01_mp4"
+    assert preview["song_plan"]["artifact_count"] == len(artifacts)
+    assert any("Prepared publish package assets" in line for line in logs)
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [

@@ -277,6 +277,26 @@ def collect_upstream_artifact_paths(manifest: dict[str, Any], *, stage: str) -> 
     return paths
 
 
+def collect_upstream_artifacts(manifest: dict[str, Any], *, stage: str) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    for upstream in manifest.get("pipeline_context", []):
+        if upstream.get("stage") != stage:
+            continue
+        output_manifest_path = upstream.get("output_manifest_path")
+        if not output_manifest_path:
+            continue
+        output_manifest_file = pathlib.Path(str(output_manifest_path))
+        if not output_manifest_file.exists():
+            continue
+        output_manifest = json.loads(output_manifest_file.read_text(encoding="utf-8"))
+        remote_job_dir = pathlib.Path(str(output_manifest.get("remote_job_dir", output_manifest_file.parent)))
+        for artifact in output_manifest.get("artifacts", []):
+            filename = artifact.get("filename")
+            if filename:
+                collected.append({**artifact, "source_path": remote_job_dir / str(filename)})
+    return collected
+
+
 def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> str:
     return find_upstream_artifact_path(manifest, stage=stage, artifact_id=artifact_id).read_text(encoding="utf-8")
 
@@ -926,6 +946,78 @@ def render_reel_video_assets(job_dir: pathlib.Path, manifest: dict[str, Any], re
     return descriptors, logs
 
 
+def prepare_publish_video_assets(job_dir: pathlib.Path, manifest: dict[str, Any], publish_package: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], list[str]]:
+    package_path = pathlib.Path(str(publish_package.get("package_path") or "publish/package"))
+    descriptors: list[tuple[str, str, str, str]] = []
+    assets: list[dict[str, Any]] = []
+
+    full_episode = next(
+        (
+            artifact
+            for artifact in collect_upstream_artifacts(manifest, stage="render.full_episode")
+            if artifact.get("artifact_id") == "full_episode_mp4"
+        ),
+        None,
+    )
+    if not full_episode:
+        raise WorkerConfigurationError("publish.prepare_package requires render.full_episode/full_episode_mp4.")
+    full_episode_source = pathlib.Path(full_episode["source_path"])
+    if not full_episode_source.exists():
+        raise WorkerConfigurationError(f"Publish source MP4 does not exist: {full_episode_source}")
+    full_episode_target = package_path / "videos" / "full-episode.mp4"
+    full_episode_target_path = job_dir / full_episode_target
+    full_episode_target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(full_episode_source, full_episode_target_path)
+    descriptors.append(("publish_full_episode_mp4", "publish_video", str(full_episode_target), "video/mp4"))
+    assets.append(
+        {
+            "artifact_id": "publish_full_episode_mp4",
+            "role": "full_episode",
+            "source_artifact_id": "full_episode_mp4",
+            "filename": str(full_episode_target),
+            "mime_type": "video/mp4",
+        }
+    )
+
+    reel_artifacts = [
+        artifact
+        for artifact in collect_upstream_artifacts(manifest, stage="render.reels")
+        if str(artifact.get("artifact_id", "")).startswith("reel_") and str(artifact.get("artifact_id", "")).endswith("_mp4")
+    ]
+    for index, reel_artifact in enumerate(reel_artifacts, start=1):
+        source_path = pathlib.Path(reel_artifact["source_path"])
+        if not source_path.exists():
+            raise WorkerConfigurationError(f"Publish source reel MP4 does not exist: {source_path}")
+        target = package_path / "reels" / f"reel-{index:02d}.mp4"
+        target_path = job_dir / target
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+        artifact_id = f"publish_reel_{index:02d}_mp4"
+        descriptors.append((artifact_id, "publish_reel_video", str(target), "video/mp4"))
+        assets.append(
+            {
+                "artifact_id": artifact_id,
+                "role": "reel",
+                "source_artifact_id": str(reel_artifact.get("artifact_id")),
+                "filename": str(target),
+                "mime_type": "video/mp4",
+            }
+        )
+
+    if not reel_artifacts:
+        raise WorkerConfigurationError("publish.prepare_package requires at least one render.reels MP4 artifact.")
+
+    assets_manifest = {
+        "package_path": str(package_path),
+        "asset_count": len(assets),
+        "assets": assets,
+        "status": "publish_assets_ready",
+    }
+    write_json(job_dir / "publish_assets_manifest.json", assets_manifest)
+    descriptors.append(("publish_assets_manifest_json", "publish_assets_manifest", "publish_assets_manifest.json", "application/json"))
+    return descriptors, [f"Prepared publish package assets: {len(assets)}"]
+
+
 def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
@@ -1446,6 +1538,10 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
         rendered_descriptors, reel_logs = render_reel_video_assets(job_dir, manifest, payloads["reels.json"])
         descriptors = [*descriptors, *rendered_descriptors]
         render_logs.extend(reel_logs)
+    if stage == "publish.prepare_package" and worker_mode() != "deterministic" and isinstance(payloads.get("publish_package.json"), dict):
+        publish_descriptors, publish_logs = prepare_publish_video_assets(job_dir, manifest, payloads["publish_package.json"])
+        descriptors = [*descriptors, *publish_descriptors]
+        render_logs.extend(publish_logs)
     artifacts = [
         artifact_for(job_dir, manifest=manifest, artifact_id=artifact_id, artifact_type=artifact_type, filename=filename, mime_type=mime_type)
         for artifact_id, artifact_type, filename, mime_type in descriptors

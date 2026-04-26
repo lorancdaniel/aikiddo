@@ -142,6 +142,8 @@ For production provider stages (`lyrics.generate`, `characters.import_or_approve
 
 The bootstrap script installs `ffmpeg`. The current `render.full_episode` stage writes server-owned `full_episode.json`, `render_plan.json`, `ffmpeg_commands.txt`, per-scene MP4 files, and `renders/<episode_slug>/full-episode.mp4` from the approved keyframe PNG files. The `render.reels` stage then crops vertical 9:16 reel MP4 files from that full episode using the planned scene offsets.
 
+The `publish.prepare_package` stage does not upload anything. It copies the final episode MP4 and reel MP4 files into `publish/<episode_slug>/`, writes `publish_assets_manifest.json`, and keeps the package ready for manual operator review.
+
 Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default production behavior requires a saved SSH profile before any generation job can start. This prevents accidental local/mock artifacts from being treated as server-owned generation output.
 
 Do not set `AIKIDDO_WORKER_MODE=deterministic` on the Ubuntu server unless you are deliberately doing a local development smoke test. That mode writes deterministic scaffolding instead of real provider output.
@@ -217,7 +219,7 @@ Stack:
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
 - Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
-- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; render.full_episode writes full_episode.json, render_plan.json, ffmpeg_commands.txt, scene MP4 files, and a full-episode MP4 through FFmpeg; render.reels writes reels.json plus vertical reel MP4 artifacts from the full episode; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
+- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; render.full_episode writes full_episode.json, render_plan.json, ffmpeg_commands.txt, scene MP4 files, and a full-episode MP4 through FFmpeg; render.reels writes reels.json plus vertical reel MP4 artifacts from the full episode; publish.prepare_package copies the episode/reel MP4s into a server-side publish package with publish_assets_manifest.json; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
 - Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
