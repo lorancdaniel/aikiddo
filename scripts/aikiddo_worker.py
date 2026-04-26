@@ -719,6 +719,79 @@ def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -
     return payload
 
 
+def make_openai_compliance_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
+    reels = read_upstream_artifact_json(manifest, stage="render.reels", artifact_id="reels_json")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "title",
+            "topic",
+            "age_range",
+            "overall_status",
+            "episode_output_path",
+            "reel_output_paths",
+            "checks",
+            "operator_notes",
+        ],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "age_range": {"type": "string"},
+            "overall_status": {"type": "string"},
+            "episode_output_path": {"type": "string"},
+            "reel_output_paths": {"type": "array", "items": {"type": "string"}},
+            "checks": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "label", "status", "evidence"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                        "status": {"type": "string"},
+                        "evidence": {"type": "string"},
+                    },
+                },
+            },
+            "operator_notes": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "full_episode": full_episode,
+            "reels": reels,
+            "requirements": [
+                "Review the server render manifests for child-safe language, sensory pacing, story completion, and distribution readiness.",
+                "Do not approve publication automatically.",
+                "Use pass only when the manifest evidence supports it; use review when the operator must inspect final rendered files or upload settings.",
+                "Include episode_output_path and every reel output path from the upstream manifests.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side safety and quality compliance reviewer for Aikiddo.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["age_range"] = str(payload.get("age_range") or brief["age_range"])
+    payload["overall_status"] = "ready_for_human_review"
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
@@ -731,6 +804,7 @@ def ensure_stage_can_run(stage: str) -> None:
         "video.scenes.generate",
         "render.full_episode",
         "render.reels",
+        "quality.compliance_report",
     }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
@@ -911,6 +985,10 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "quality.compliance_report":
+        if worker_mode() != "deterministic":
+            return [("compliance_report_json", "compliance_report", "compliance_report.json", "application/json")], {
+                "compliance_report.json": make_openai_compliance_payload(manifest, brief),
+            }
         return [("compliance_report_json", "compliance_report", "compliance_report.json", "application/json")], {
             "compliance_report.json": {
                 "title": title,
