@@ -848,6 +848,20 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
         encoding="utf-8",
     )
 
+    keyframes_job_dir = tmp_path / "keyframes_job"
+    keyframes_job_dir.mkdir()
+    (keyframes_job_dir / "keyframe_01.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-keyframe-image")
+    keyframes_output_path = keyframes_job_dir / "output_manifest.json"
+    keyframes_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(keyframes_job_dir),
+                "artifacts": [{"artifact_id": "keyframe_01_png", "filename": "keyframe_01.png", "mime_type": "image/png"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     video_job_dir = tmp_path / "video_scenes_job"
     video_job_dir.mkdir()
     (video_job_dir / "video_scenes.json").write_text(
@@ -861,6 +875,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
                     {
                         "id": "video_scene_01",
                         "source_keyframe_id": "keyframe_01",
+                        "source_keyframe_image": "keyframe_01.png",
                         "scene_id": "scene_01_opening",
                         "duration_seconds": 4,
                         "motion_prompt": "small friendly wave, no sudden motion",
@@ -872,6 +887,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
                     {
                         "id": "video_scene_02",
                         "source_keyframe_id": "keyframe_02",
+                        "source_keyframe_image": "keyframe_01.png",
                         "scene_id": "scene_02_repeat",
                         "duration_seconds": 5,
                         "motion_prompt": "slow brushing gesture loop",
@@ -883,6 +899,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
                     {
                         "id": "video_scene_03",
                         "source_keyframe_id": "keyframe_03",
+                        "source_keyframe_image": "keyframe_01.png",
                         "scene_id": "scene_03_close",
                         "duration_seconds": 6,
                         "motion_prompt": "character smiles near the clean sink",
@@ -952,16 +969,21 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
             "stage": "render.full_episode",
             "pipeline_context": [
                 {"stage": "audio.generate_or_import", "output_manifest_path": str(audio_output_path)},
+                {"stage": "keyframes.generate", "output_manifest_path": str(keyframes_output_path)},
                 {"stage": "video.scenes.generate", "output_manifest_path": str(video_output_path)},
             ],
         },
     )
 
-    assert descriptors == [("full_episode_json", "full_episode", "full_episode.json", "application/json")]
+    assert ("full_episode_json", "full_episode", "full_episode.json", "application/json") in descriptors
+    assert ("render_plan_json", "render_plan", "render_plan.json", "application/json") in descriptors
+    assert ("ffmpeg_commands_txt", "render_commands", "ffmpeg_commands.txt", "text/plain") in descriptors
     assert payloads["full_episode.json"]["duration_seconds"] == 15
     assert payloads["full_episode.json"]["scene_count"] == 3
     assert payloads["full_episode.json"]["status"] == "server_render_manifest_ready"
     assert payloads["full_episode.json"]["output_path"] == "renders/brush-song/full-episode.mp4"
+    assert payloads["render_plan.json"]["clips"][0]["source_image_path"].endswith("keyframe_01.png")
+    assert "ffmpeg -y -loop 1" in payloads["ffmpeg_commands.txt"]
 
 
 def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path: Path, monkeypatch) -> None:

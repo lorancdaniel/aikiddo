@@ -20,7 +20,7 @@ fi
 
 echo "==> Installing system dependencies"
 sudo apt update
-sudo apt install -y git curl ca-certificates build-essential python3 python3-venv python3-pip
+sudo apt install -y git curl ca-certificates build-essential ffmpeg python3 python3-venv python3-pip
 
 if ! command -v node >/dev/null 2>&1; then
   echo "==> Installing Node.js LTS"
@@ -33,6 +33,7 @@ fi
 echo "==> Node: $(node -v)"
 echo "==> npm: $(npm -v)"
 echo "==> Python: $(python3 --version)"
+echo "==> FFmpeg: $(ffmpeg -version | head -n 1)"
 
 if [ ! -d "$APP_DIR/.git" ]; then
   echo "==> Cloning repo into $APP_DIR"

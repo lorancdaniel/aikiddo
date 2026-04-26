@@ -14,6 +14,7 @@ import json
 import math
 import os
 import pathlib
+import shlex
 import socket
 import struct
 import sys
@@ -252,6 +253,26 @@ def find_upstream_artifact_path(manifest: dict[str, Any], *, stage: str, artifac
             if artifact.get("artifact_id") == artifact_id:
                 return remote_job_dir / str(artifact["filename"])
     raise WorkerConfigurationError(f"Required upstream artifact {stage}/{artifact_id} is missing.")
+
+
+def collect_upstream_artifact_paths(manifest: dict[str, Any], *, stage: str) -> dict[str, pathlib.Path]:
+    paths: dict[str, pathlib.Path] = {}
+    for upstream in manifest.get("pipeline_context", []):
+        if upstream.get("stage") != stage:
+            continue
+        output_manifest_path = upstream.get("output_manifest_path")
+        if not output_manifest_path:
+            continue
+        output_manifest_file = pathlib.Path(str(output_manifest_path))
+        if not output_manifest_file.exists():
+            continue
+        output_manifest = json.loads(output_manifest_file.read_text(encoding="utf-8"))
+        remote_job_dir = pathlib.Path(str(output_manifest.get("remote_job_dir", output_manifest_file.parent)))
+        for artifact in output_manifest.get("artifacts", []):
+            filename = artifact.get("filename")
+            if filename:
+                paths[str(filename)] = remote_job_dir / str(filename)
+    return paths
 
 
 def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> str:
@@ -680,6 +701,77 @@ def make_openai_full_episode_payload(manifest: dict[str, Any], brief: dict[str, 
     return payload
 
 
+def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
+    audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
+    image_paths = collect_upstream_artifact_paths(manifest, stage="keyframes.generate")
+    episode_slug = str(full_episode.get("episode_slug") or slugify(str(full_episode.get("title") or "episode")) or "episode")
+    scene_dir = f"renders/{episode_slug}/scenes"
+    clips: list[dict[str, Any]] = []
+    commands: list[str] = [f"mkdir -p {shlex.quote(scene_dir)}"]
+    for index, clip in enumerate(video_scenes.get("clips", []), start=1):
+        clip_id = str(clip.get("id") or f"video_scene_{index:02d}")
+        keyframe_id = str(clip.get("source_keyframe_id") or f"keyframe_{index:02d}")
+        source_image = str(clip.get("source_keyframe_image") or f"{keyframe_id}.png")
+        if source_image not in image_paths:
+            raise WorkerConfigurationError(f"Required keyframe image {source_image} is missing from keyframes.generate output.")
+        source_image_path = image_paths[source_image]
+        duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
+        output_path = f"{scene_dir}/{clip_id}.mp4"
+        clips.append(
+            {
+                "id": clip_id,
+                "source_keyframe_id": keyframe_id,
+                "source_keyframe_image": source_image,
+                "source_image_path": str(source_image_path),
+                "duration_seconds": duration_seconds,
+                "motion_prompt": str(clip.get("motion_prompt") or ""),
+                "camera_motion": str(clip.get("camera_motion") or ""),
+                "transition": str(clip.get("transition") or "cut"),
+                "output_path": output_path,
+            }
+        )
+        video_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
+        commands.append(
+            " ".join(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-t",
+                    str(duration_seconds),
+                    "-i",
+                    shlex.quote(str(source_image_path)),
+                    "-vf",
+                    shlex.quote(video_filter),
+                    "-r",
+                    "30",
+                    "-pix_fmt",
+                    "yuv420p",
+                    shlex.quote(output_path),
+                ]
+            )
+        )
+    concat_list_path = f"renders/{episode_slug}/concat-list.txt"
+    final_output_path = str(full_episode.get("output_path") or f"renders/{episode_slug}/full-episode.mp4")
+    commands.append(f"# Write approved scene paths to {shlex.quote(concat_list_path)} before final assembly.")
+    commands.append(f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(concat_list_path)} -c copy {shlex.quote(final_output_path)}")
+    render_plan = {
+        "title": str(full_episode.get("title") or video_scenes.get("title") or "Untitled episode"),
+        "episode_slug": episode_slug,
+        "scene_count": len(clips),
+        "duration_seconds": sum(int(clip["duration_seconds"]) for clip in clips),
+        "audio_plan_status": str(audio_plan.get("status") or "unknown"),
+        "audio_format": str(audio_plan.get("format") or "unknown"),
+        "clips": clips,
+        "concat_list_path": concat_list_path,
+        "output_path": final_output_path,
+        "status": "render_plan_ready",
+    }
+    return render_plan, "\n".join(commands) + "\n"
+
+
 def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
@@ -1080,8 +1172,16 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
 
     if stage == "render.full_episode":
         if worker_mode() != "deterministic":
-            return [("full_episode_json", "full_episode", "full_episode.json", "application/json")], {
-                "full_episode.json": make_openai_full_episode_payload(manifest, brief),
+            full_episode = make_openai_full_episode_payload(manifest, brief)
+            render_plan, ffmpeg_commands = make_full_episode_render_plan(manifest, full_episode)
+            return [
+                ("full_episode_json", "full_episode", "full_episode.json", "application/json"),
+                ("render_plan_json", "render_plan", "render_plan.json", "application/json"),
+                ("ffmpeg_commands_txt", "render_commands", "ffmpeg_commands.txt", "text/plain"),
+            ], {
+                "full_episode.json": full_episode,
+                "render_plan.json": render_plan,
+                "ffmpeg_commands.txt": ffmpeg_commands,
             }
         return [
             ("full_episode_json", "full_episode", "full_episode.json", "application/json"),

@@ -140,6 +140,8 @@ If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
 For production provider stages (`lyrics.generate`, `characters.import_or_approve`, `audio.generate_or_import`, `storyboard.generate`, `keyframes.generate`, `video.scenes.generate`, `render.full_episode`, `render.reels`, `quality.compliance_report`, and `publish.prepare_package`), uncomment `OPENAI_API_KEY` in `.env.ops` and put the real key there before starting the backend. The backend passes only the allowlisted provider variables (`OPENAI_API_KEY`, `AIKIDDO_OPENAI_TEXT_MODEL`, `AIKIDDO_OPENAI_IMAGE_MODEL`, `AIKIDDO_OPENAI_IMAGE_SIZE`, `AIKIDDO_OPENAI_TTS_MODEL`, `AIKIDDO_OPENAI_TTS_VOICE`, `AIKIDDO_OPENAI_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `OPENAI_API_KEY`, production provider generation fails closed and does not write a success manifest.
 
+The bootstrap script installs `ffmpeg`. The current `render.full_episode` stage writes a server-owned `full_episode.json`, `render_plan.json`, and `ffmpeg_commands.txt` from the approved keyframe PNG files. Treat those render commands as the next operator-visible assembly step until automatic MP4 rendering is enabled.
+
 Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default production behavior requires a saved SSH profile before any generation job can start. This prevents accidental local/mock artifacts from being treated as server-owned generation output.
 
 Do not set `AIKIDDO_WORKER_MODE=deterministic` on the Ubuntu server unless you are deliberately doing a local development smoke test. That mode writes deterministic scaffolding instead of real provider output.
@@ -215,7 +217,7 @@ Stack:
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
 - Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
-- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
+- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; render.full_episode writes full_episode.json, render_plan.json, and ffmpeg_commands.txt for server assembly; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
 - Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
