@@ -58,6 +58,8 @@ if [ ! -f .env.ops ]; then
       printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)"
       printf '# export OPENAI_API_KEY=your_real_key_here\n'
       printf 'export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5\n'
+      printf 'export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts\n'
+      printf 'export AIKIDDO_OPENAI_TTS_VOICE=coral\n'
     } > .env.ops
   else
     python3 - <<'PY' > .env.ops
@@ -65,6 +67,8 @@ import secrets
 print(f"export STUDIO_ADMIN_TOKEN={secrets.token_hex(32)}")
 print("# export OPENAI_API_KEY=your_real_key_here")
 print("export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5")
+print("export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts")
+print("export AIKIDDO_OPENAI_TTS_VOICE=coral")
 PY
   fi
 else

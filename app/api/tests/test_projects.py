@@ -329,6 +329,49 @@ def test_aikiddo_worker_uses_openai_provider_for_character_bible(monkeypatch) ->
     assert "brush_friend_v1" in payloads["style_frame_prompt.txt"]
 
 
+def test_aikiddo_worker_uses_openai_speech_for_audio_stage(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+    monkeypatch.setenv("AIKIDDO_OPENAI_TTS_VOICE", "coral")
+    lyrics_job_dir = tmp_path / "lyrics_job"
+    lyrics_job_dir.mkdir()
+    (lyrics_job_dir / "lyrics.txt").write_text("Brush, brush, smile bright.\n", encoding="utf-8")
+    lyrics_output = {
+        "remote_job_dir": str(lyrics_job_dir),
+        "artifacts": [{"artifact_id": "lyrics_txt", "filename": "lyrics.txt"}],
+    }
+    lyrics_output_path = lyrics_job_dir / "output_manifest.json"
+    lyrics_output_path.write_text(json.dumps(lyrics_output), encoding="utf-8")
+
+    def fake_call_openai_speech(*, input_text: str, instructions: str) -> bytes:
+        assert "Brush, brush" in input_text
+        assert "AI-generated guide voice" in instructions
+        return b"fake-mp3-bytes"
+
+    monkeypatch.setattr(worker, "call_openai_speech", fake_call_openai_speech)
+    descriptors, payloads = worker.stage_files(
+        "audio.generate_or_import",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_audio_provider",
+            "project_id": "project_audio_provider",
+            "stage": "audio.generate_or_import",
+            "pipeline_context": [{"stage": "lyrics.generate", "output_manifest_path": str(lyrics_output_path)}],
+        },
+    )
+
+    assert ("audio_preview_mp3", "audio_preview", "audio_preview.mp3", "audio/mpeg") in descriptors
+    assert payloads["audio_preview.mp3"] == b"fake-mp3-bytes"
+    assert payloads["audio_plan.json"]["disclosure"] == "AI-generated voice draft for operator review."
+    assert payloads["audio_plan.json"]["voice"] == "coral"
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [

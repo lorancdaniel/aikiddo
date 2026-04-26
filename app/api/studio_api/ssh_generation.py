@@ -15,7 +15,14 @@ from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun
 
 class SshGenerationServer:
     adapter = "ssh"
-    worker_env_keys = ("OPENAI_API_KEY", "AIKIDDO_OPENAI_TEXT_MODEL", "AIKIDDO_OPENAI_TIMEOUT_SEC", "AIKIDDO_WORKER_MODE")
+    worker_env_keys = (
+        "OPENAI_API_KEY",
+        "AIKIDDO_OPENAI_TEXT_MODEL",
+        "AIKIDDO_OPENAI_TTS_MODEL",
+        "AIKIDDO_OPENAI_TTS_VOICE",
+        "AIKIDDO_OPENAI_TIMEOUT_SEC",
+        "AIKIDDO_WORKER_MODE",
+    )
 
     def _worker_script_source(self) -> str:
         repo_root = Path(__file__).resolve().parents[3]

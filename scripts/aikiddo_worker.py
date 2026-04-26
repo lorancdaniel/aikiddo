@@ -166,6 +166,58 @@ def call_openai_json(*, instructions: str, prompt: str, schema: dict[str, Any]) 
     return parsed
 
 
+def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise WorkerConfigurationError("OPENAI_API_KEY is required for production audio generation.")
+    model = os.getenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
+    voice = os.getenv("AIKIDDO_OPENAI_TTS_VOICE", "coral").strip() or "coral"
+    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+    request_payload = {
+        "model": model,
+        "voice": voice,
+        "input": input_text[:4096],
+        "instructions": instructions,
+        "response_format": "mp3",
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise WorkerConfigurationError(f"OpenAI speech generation failed with HTTP {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise WorkerConfigurationError(f"OpenAI speech generation failed: {exc.reason}") from exc
+
+
+def read_upstream_artifact_text(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> str:
+    for upstream in manifest.get("pipeline_context", []):
+        if upstream.get("stage") != stage:
+            continue
+        output_manifest_path = upstream.get("output_manifest_path")
+        if not output_manifest_path:
+            continue
+        output_manifest_file = pathlib.Path(str(output_manifest_path))
+        if not output_manifest_file.exists():
+            continue
+        output_manifest = json.loads(output_manifest_file.read_text(encoding="utf-8"))
+        remote_job_dir = pathlib.Path(str(output_manifest.get("remote_job_dir", output_manifest_file.parent)))
+        for artifact in output_manifest.get("artifacts", []):
+            if artifact.get("artifact_id") == artifact_id:
+                artifact_path = remote_job_dir / str(artifact["filename"])
+                return artifact_path.read_text(encoding="utf-8")
+    raise WorkerConfigurationError(f"Required upstream artifact {stage}/{artifact_id} is missing.")
+
+
 def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     schema = {
         "type": "object",
@@ -274,10 +326,32 @@ def make_openai_character_payload(manifest: dict[str, Any], brief: dict[str, Any
     return character_bible, str(payload["style_frame_prompt"]).strip() + "\n"
 
 
+def make_openai_audio_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
+    lyrics = read_upstream_artifact_text(manifest, stage="lyrics.generate", artifact_id="lyrics_txt")
+    audio_bytes = call_openai_speech(
+        input_text=lyrics,
+        instructions=(
+            "Perform as a warm AI-generated guide voice for a preschool educational song draft. "
+            "Keep the delivery cheerful, clear, gentle, and explicitly suitable for human review before publishing."
+        ),
+    )
+    audio_plan = {
+        "title": brief["title"],
+        "topic": brief["topic"],
+        "source_stage": "lyrics.generate",
+        "model": os.getenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+        "voice": os.getenv("AIKIDDO_OPENAI_TTS_VOICE", "coral"),
+        "format": "mp3",
+        "disclosure": "AI-generated voice draft for operator review.",
+        "status": "audio_preview_ready",
+    }
+    return audio_plan, audio_bytes
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
-    if stage not in {"lyrics.generate", "characters.import_or_approve"}:
+    if stage not in {"lyrics.generate", "characters.import_or_approve", "audio.generate_or_import"}:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
             "Set AIKIDDO_WORKER_MODE=deterministic only for local development."
@@ -343,18 +417,28 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "audio.generate_or_import":
-        return [
-            ("audio_plan_json", "audio_plan", "audio_plan.json", "application/json"),
-            ("audio_preview_wav", "audio_preview", "audio_preview.wav", "audio/wav"),
-        ], {
-            "audio_plan.json": {
+        if worker_mode() == "deterministic":
+            audio_plan = {
                 "title": title,
                 "tempo": "moderate",
                 "duration_target_sec": 60,
                 "loudness_policy": "child-safe gentle limiter",
                 "status": "preview_ready",
-            },
-            "audio_preview.wav": {"kind": "audio"},
+            }
+            return [
+                ("audio_plan_json", "audio_plan", "audio_plan.json", "application/json"),
+                ("audio_preview_wav", "audio_preview", "audio_preview.wav", "audio/wav"),
+            ], {
+                "audio_plan.json": audio_plan,
+                "audio_preview.wav": {"kind": "audio"},
+            }
+        audio_plan, audio_preview = make_openai_audio_payload(manifest, brief)
+        return [
+            ("audio_plan_json", "audio_plan", "audio_plan.json", "application/json"),
+            ("audio_preview_mp3", "audio_preview", "audio_preview.mp3", "audio/mpeg"),
+        ], {
+            "audio_plan.json": audio_plan,
+            "audio_preview.mp3": audio_preview,
         }
 
     if stage == "storyboard.generate":
@@ -481,7 +565,9 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
         ]
     for filename, payload in payloads.items():
         path = job_dir / filename
-        if filename.endswith(".json"):
+        if isinstance(payload, bytes):
+            path.write_bytes(payload)
+        elif filename.endswith(".json"):
             write_json(path, payload)
         elif filename.endswith(".wav"):
             build_audio_preview(job_dir, brief["topic"], filename=filename)
