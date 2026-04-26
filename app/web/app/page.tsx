@@ -374,18 +374,9 @@ export default function Home() {
   }, [selectedProject, seriesList]);
 
   const publishPrimaryArtifacts = useMemo(() => {
-    if (!selectedProject || serverJobDetail?.stage !== "publish.prepare_package") return [];
-    const priority = ["publish_package_zip", "publish_full_episode_mp4"];
-    return [...serverArtifacts]
-      .filter((artifact) => artifact.artifact_id === "publish_package_zip" || artifact.artifact_id === "publish_full_episode_mp4" || artifact.artifact_id.startsWith("publish_reel_"))
-      .sort((left, right) => {
-        const leftPriority = priority.indexOf(left.artifact_id);
-        const rightPriority = priority.indexOf(right.artifact_id);
-        const normalizedLeft = leftPriority === -1 ? 99 : leftPriority;
-        const normalizedRight = rightPriority === -1 ? 99 : rightPriority;
-        return normalizedLeft - normalizedRight || left.artifact_id.localeCompare(right.artifact_id);
-      });
-  }, [selectedProject, serverArtifacts, serverJobDetail?.stage]);
+    if (!selectedProject || serverJobDetail?.stage !== "publish.prepare_package" || serverJobDetail.publish?.status !== "ready") return [];
+    return serverJobDetail.publish.primary_artifacts;
+  }, [selectedProject, serverJobDetail?.publish, serverJobDetail?.stage]);
 
   const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
 
@@ -1532,7 +1523,7 @@ export default function Home() {
               {publishPrimaryArtifacts.length ? (
                 <div className="mt-4 grid grid-flow-dense grid-cols-1 gap-3 md:grid-cols-2" data-testid="publish-primary-downloads">
                   {publishPrimaryArtifacts.map((artifact) => {
-                    const isArchive = artifact.artifact_id === "publish_package_zip";
+                    const isArchive = artifact.role === "publish_package_zip";
                     const downloadUrl =
                       selectedProject && serverJobDetail
                         ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${serverJobDetail.id}/artifacts/${artifact.artifact_id}`)

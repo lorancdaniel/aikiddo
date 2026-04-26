@@ -63,6 +63,20 @@ test("operator sees primary publish package downloads", async ({ page }) => {
   };
   const artifacts = [
     {
+      artifact_id: "publish_reel_99_mp4",
+      type: "publish_reel_video",
+      filename: "publish/brush-song/reels/old-reel-99.mp4",
+      mime_type: "video/mp4",
+      size_bytes: 1024,
+      sha256: "decoydecoydecoydecoydecoydecoydecoydecoydecoydecoydecoydec0",
+      storage_key: "projects/project_publish/jobs/job_publish/publish/brush-song/reels/old-reel-99.mp4",
+      public: false,
+      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_99_mp4",
+      role: "technical_artifact",
+      is_primary: false,
+      stage: "publish.prepare_package"
+    },
+    {
       artifact_id: "publish_package_zip",
       type: "publish_archive",
       filename: "publish/brush-song.zip",
@@ -71,7 +85,10 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       sha256: "abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abcd",
       storage_key: "projects/project_publish/jobs/job_publish/publish/brush-song.zip",
       public: false,
-      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip"
+      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip",
+      role: "publish_package_zip",
+      is_primary: true,
+      stage: "publish.prepare_package"
     },
     {
       artifact_id: "publish_full_episode_mp4",
@@ -82,7 +99,10 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       sha256: "def456def456def456def456def456def456def456def456def456def456def0",
       storage_key: "projects/project_publish/jobs/job_publish/publish/brush-song/videos/full-episode.mp4",
       public: false,
-      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4"
+      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_full_episode_mp4",
+      role: "full_episode_mp4",
+      is_primary: true,
+      stage: "publish.prepare_package"
     },
     {
       artifact_id: "publish_reel_01_mp4",
@@ -93,9 +113,18 @@ test("operator sees primary publish package downloads", async ({ page }) => {
       sha256: "9876549876549876549876549876549876549876549876549876549876549876",
       storage_key: "projects/project_publish/jobs/job_publish/publish/brush-song/reels/reel-01.mp4",
       public: false,
-      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_01_mp4"
+      download_url: "/api/projects/project_publish/jobs/job_publish/artifacts/publish_reel_01_mp4",
+      role: "vertical_reel_mp4",
+      is_primary: true,
+      stage: "publish.prepare_package"
     }
   ];
+  const publish = {
+    status: "ready",
+    primary_artifacts: artifacts.filter((artifact) => artifact.is_primary),
+    supporting_artifacts: artifacts.filter((artifact) => !artifact.is_primary),
+    missing_roles: []
+  };
 
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -119,6 +148,7 @@ test("operator sees primary publish package downloads", async ({ page }) => {
         adapter: "ssh",
         preview: null,
         artifacts,
+        publish,
         log_url: "/api/projects/project_publish/jobs/job_publish/log",
         error: null,
         attempt_id: "attempt_publish",
@@ -163,6 +193,7 @@ test("operator sees primary publish package downloads", async ({ page }) => {
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("brush-song.zip");
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("full-episode.mp4");
   await expect(page.getByTestId("publish-primary-downloads")).toContainText("reel-01.mp4");
+  await expect(page.getByTestId("publish-primary-downloads")).not.toContainText("old-reel-99.mp4");
   await expect(page.getByTestId("publish-primary-downloads").getByRole("link", { name: /brush-song.zip/i })).toHaveAttribute(
     "href",
     "http://127.0.0.1:8010/api/projects/project_publish/jobs/job_publish/artifacts/publish_package_zip"

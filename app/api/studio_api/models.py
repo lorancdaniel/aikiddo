@@ -501,6 +501,9 @@ class GenerationArtifact(BaseModel):
 
 class GenerationArtifactView(GenerationArtifact):
     download_url: str
+    role: str = "technical_artifact"
+    is_primary: bool = False
+    stage: str | None = None
 
 
 class GenerationPreview(BaseModel):
@@ -520,6 +523,13 @@ class GenerationRunnerState(BaseModel):
     attempt_id: str | None = None
     heartbeat_at: str | None = None
     lease_expires_at: str | None = None
+
+
+class PublishJobSummary(BaseModel):
+    status: Literal["ready", "missing", "incomplete"]
+    primary_artifacts: list[GenerationArtifactView] = Field(default_factory=list)
+    supporting_artifacts: list[GenerationArtifactView] = Field(default_factory=list)
+    missing_roles: list[str] = Field(default_factory=list)
 
 
 class JobEvent(BaseModel):
@@ -556,6 +566,7 @@ class GenerationJobDetail(BaseModel):
     adapter: Literal["mock", "ssh"]
     preview: GenerationPreview | None = None
     artifacts: list[GenerationArtifactView] = Field(default_factory=list)
+    publish: PublishJobSummary | None = None
     log_url: str | None = None
     error: dict | None = None
     attempt_id: str | None = None

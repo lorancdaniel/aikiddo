@@ -209,6 +209,16 @@ export type GenerationArtifact = {
 
 export type GenerationArtifactView = GenerationArtifact & {
   download_url: string;
+  role: string;
+  is_primary: boolean;
+  stage: string | null;
+};
+
+export type PublishJobSummary = {
+  status: "ready" | "missing" | "incomplete";
+  primary_artifacts: GenerationArtifactView[];
+  supporting_artifacts: GenerationArtifactView[];
+  missing_roles: string[];
 };
 
 export type GenerationPreview = {
@@ -229,6 +239,7 @@ export type GenerationJobDetail = {
   adapter: "mock" | "ssh";
   preview: GenerationPreview | null;
   artifacts: GenerationArtifactView[];
+  publish: PublishJobSummary | null;
   log_url: string | null;
   error: { code: string; message: string } | null;
   attempt_id: string | null;

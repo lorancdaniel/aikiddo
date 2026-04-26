@@ -3099,6 +3099,136 @@ def test_remote_job_artifact_contract_is_exposed_by_backend(tmp_path: Path, monk
     assert job_detail["finished_at"] == job_detail["updated_at"]
 
 
+def test_publish_job_detail_returns_backend_owned_primary_artifacts(tmp_path: Path) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child remembers morning brushing",
+            "characters": [],
+        },
+    ).json()
+    job_id = "remote_publish_contract"
+    now = "2026-04-26T12:00:00+00:00"
+    storage_prefix = f"projects/{project['id']}/jobs/{job_id}"
+    artifacts = [
+        {
+            "artifact_id": "publish_package_json",
+            "type": "publish_package",
+            "filename": "publish_package.json",
+            "mime_type": "application/json",
+            "size_bytes": 512,
+            "sha256": "sha-publish-json",
+            "storage_key": f"{storage_prefix}/publish_package.json",
+            "public": False,
+        },
+        {
+            "artifact_id": "publish_assets_manifest_json",
+            "type": "publish_assets_manifest",
+            "filename": "publish_assets_manifest.json",
+            "mime_type": "application/json",
+            "size_bytes": 512,
+            "sha256": "sha-assets-json",
+            "storage_key": f"{storage_prefix}/publish_assets_manifest.json",
+            "public": False,
+        },
+        {
+            "artifact_id": "publish_full_episode_mp4",
+            "type": "publish_video",
+            "filename": "publish/brush-song/videos/full-episode.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": 10485760,
+            "sha256": "sha-full-mp4",
+            "storage_key": f"{storage_prefix}/publish/brush-song/videos/full-episode.mp4",
+            "public": False,
+        },
+        {
+            "artifact_id": "publish_reel_01_mp4",
+            "type": "publish_reel_video",
+            "filename": "publish/brush-song/reels/reel-01.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": 2097152,
+            "sha256": "sha-reel-mp4",
+            "storage_key": f"{storage_prefix}/publish/brush-song/reels/reel-01.mp4",
+            "public": False,
+        },
+        {
+            "artifact_id": "publish_package_zip",
+            "type": "publish_archive",
+            "filename": "publish/brush-song.zip",
+            "mime_type": "application/zip",
+            "size_bytes": 12582912,
+            "sha256": "sha-publish-zip",
+            "storage_key": f"{storage_prefix}/publish/brush-song.zip",
+            "public": False,
+        },
+    ]
+    project_dir = tmp_path / "projects" / project["id"]
+    jobs_dir = project_dir / "jobs"
+    runs_dir = project_dir / "remote-runs"
+    jobs_dir.mkdir(parents=True)
+    runs_dir.mkdir(parents=True)
+    (jobs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "message": "Publish package ready.",
+                "attempt_id": "attempt_publish_contract",
+                "failure_reason": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "remote_job_dir": f"/home/daniel/aikiddo-worker/jobs/{job_id}",
+                "job_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/job_manifest.json",
+                "output_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/output_manifest.json",
+                "output_files": [artifact["storage_key"] for artifact in artifacts],
+                "artifacts": artifacts,
+                "preview": None,
+                "message": "Publish package ready.",
+                "logs": ["ready"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/api/jobs/{job_id}")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["publish"]["status"] == "ready"
+    assert [artifact["artifact_id"] for artifact in detail["publish"]["primary_artifacts"]] == [
+        "publish_package_zip",
+        "publish_full_episode_mp4",
+        "publish_reel_01_mp4",
+    ]
+    assert detail["publish"]["primary_artifacts"][0]["role"] == "publish_package_zip"
+    assert detail["publish"]["primary_artifacts"][0]["is_primary"] is True
+    assert detail["publish"]["primary_artifacts"][0]["download_url"].endswith(f"/jobs/{job_id}/artifacts/publish_package_zip")
+    assert detail["artifacts"][0]["role"] == "publish_manifest"
+    assert detail["artifacts"][0]["is_primary"] is False
+
+
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

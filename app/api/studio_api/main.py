@@ -34,6 +34,7 @@ from .models import (
     Project,
     ProjectNextAction,
     ProjectSeriesLinkInput,
+    PublishJobSummary,
     PublishPackageArtifact,
     ReelsArtifact,
     ServerProfile,
@@ -785,6 +786,56 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         )
         return storage.save_project(project)
 
+    def publish_artifact_role(artifact: GenerationArtifact) -> str:
+        if artifact.artifact_id == "publish_package_zip":
+            return "publish_package_zip"
+        if artifact.artifact_id == "publish_full_episode_mp4":
+            return "full_episode_mp4"
+        if artifact.artifact_id.startswith("publish_reel_") and artifact.artifact_id.endswith("_mp4"):
+            return "vertical_reel_mp4"
+        if artifact.artifact_id == "publish_package_json":
+            return "publish_manifest"
+        if artifact.artifact_id == "publish_assets_manifest_json":
+            return "publish_assets_manifest"
+        if artifact.artifact_id == "compliance_report_json":
+            return "compliance_report"
+        return "technical_artifact"
+
+    def build_artifact_view(job: Job, artifact: GenerationArtifact) -> GenerationArtifactView:
+        role = publish_artifact_role(artifact) if job.stage == "publish.prepare_package" else "technical_artifact"
+        return GenerationArtifactView(
+            **artifact.model_dump(),
+            download_url=f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}",
+            role=role,
+            is_primary=role in {"publish_package_zip", "full_episode_mp4", "vertical_reel_mp4"},
+            stage=job.stage,
+        )
+
+    def build_publish_summary(job: Job, artifacts: list[GenerationArtifactView]) -> PublishJobSummary | None:
+        if job.stage != "publish.prepare_package":
+            return None
+        required_roles = ["publish_package_zip", "full_episode_mp4", "vertical_reel_mp4", "publish_manifest", "publish_assets_manifest"]
+        artifacts_by_role = {artifact.role: artifact for artifact in artifacts if artifact.sha256}
+        missing_roles = [role for role in required_roles if role not in artifacts_by_role]
+        if "publish_package_zip" in missing_roles:
+            status_value = "missing"
+        elif missing_roles:
+            status_value = "incomplete"
+        else:
+            status_value = "ready"
+        primary_order = {"publish_package_zip": 0, "full_episode_mp4": 1, "vertical_reel_mp4": 2}
+        primary_artifacts = sorted(
+            [artifact for artifact in artifacts if artifact.is_primary],
+            key=lambda artifact: (primary_order.get(artifact.role, 99), artifact.artifact_id),
+        )
+        supporting_artifacts = [artifact for artifact in artifacts if not artifact.is_primary]
+        return PublishJobSummary(
+            status=status_value,
+            primary_artifacts=primary_artifacts if status_value == "ready" else [],
+            supporting_artifacts=supporting_artifacts,
+            missing_roles=missing_roles,
+        )
+
     def build_generation_job_detail(job: Job) -> GenerationJobDetail:
         normalized_status, phase = normalize_job_status(job.status)
         queue_position = queue_position_for(job)
@@ -808,13 +859,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             else:
                 runner = GenerationRunnerState(mode="single_flight", resource=SSH_WORKER_RESOURCE, state="released", attempt_id=job.attempt_id)
         run = storage.get_remote_pilot_run(job.project_id, job.id) if job.adapter == "ssh" else None
-        artifacts = [
-            GenerationArtifactView(
-                **artifact.model_dump(),
-                download_url=f"/api/projects/{job.project_id}/jobs/{job.id}/artifacts/{artifact.artifact_id}",
-            )
-            for artifact in (run.artifacts if run is not None else [])
-        ]
+        artifacts = [build_artifact_view(job, artifact) for artifact in (run.artifacts if run is not None else [])]
         error = {"code": "runner_failed", "message": job.message} if normalized_status == "failed" else None
         finished_at = job.updated_at if normalized_status in {"succeeded", "failed", "cancelled"} else None
         return GenerationJobDetail(
@@ -828,6 +873,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             adapter=job.adapter,
             preview=run.preview if run is not None else None,
             artifacts=artifacts,
+            publish=build_publish_summary(job, artifacts),
             log_url=f"/api/projects/{job.project_id}/jobs/{job.id}/log" if run is not None else None,
             error=error,
             attempt_id=job.attempt_id,
