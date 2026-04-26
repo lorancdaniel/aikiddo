@@ -1021,6 +1021,9 @@ def test_aikiddo_worker_uses_local_model_provider_for_full_episode_render_manife
     assert payloads["full_episode.json"]["status"] == "server_render_manifest_ready"
     assert payloads["full_episode.json"]["output_path"] == "renders/brush-song/full-episode.mp4"
     assert payloads["render_plan.json"]["clips"][0]["source_image_path"].endswith("keyframe_01.png")
+    assert payloads["render_plan.json"]["assembly_source"] == "static_keyframe_fallback"
+    assert payloads["render_plan.json"]["fallback_used"] is True
+    assert payloads["render_plan.json"]["fallback_reason"] == "generated_scene_videos_missing"
     assert "ffmpeg -y -loop 1" in payloads["ffmpeg_commands.txt"]
 
 
@@ -1261,6 +1264,10 @@ def test_aikiddo_worker_assembles_full_episode_from_generated_scene_videos(tmp_p
     assert "scene_video_01_mp4" in artifact_ids
     assert (job_dir / "renders" / "brush-song" / "scenes" / "video_scene_01.mp4").read_bytes() == b"local video scene 1"
     assert (job_dir / "renders" / "brush-song" / "full-episode.mp4").read_bytes() == b"assembled mp4 bytes"
+    render_plan = json.loads((job_dir / "render_plan.json").read_text(encoding="utf-8"))
+    assert render_plan["assembly_source"] == "generated_scene_videos"
+    assert render_plan["fallback_used"] is False
+    assert render_plan["fallback_reason"] is None
     assert len(ffmpeg_calls) == 1
     assert ffmpeg_calls[0][:5] == ["ffmpeg", "-y", "-f", "concat", "-safe"]
     assert all("-loop" not in call for call in ffmpeg_calls)

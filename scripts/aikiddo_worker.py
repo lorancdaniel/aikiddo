@@ -798,6 +798,8 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
     scene_dir = f"renders/{episode_slug}/scenes"
     clips: list[dict[str, Any]] = []
     commands: list[str] = [f"mkdir -p {shlex.quote(scene_dir)}"]
+    generated_scene_count = 0
+    fallback_scene_count = 0
     for index, clip in enumerate(video_scenes.get("clips", []), start=1):
         clip_id = str(clip.get("id") or f"video_scene_{index:02d}")
         keyframe_id = str(clip.get("source_keyframe_id") or f"keyframe_{index:02d}")
@@ -818,6 +820,7 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
         if scene_video_filename and scene_video_filename in generated_scene_paths:
             clip_plan["source_video_path"] = str(generated_scene_paths[scene_video_filename])
             clips.append(clip_plan)
+            generated_scene_count += 1
             commands.append(f"cp {shlex.quote(str(generated_scene_paths[scene_video_filename]))} {shlex.quote(output_path)}")
             continue
         if source_image not in image_paths:
@@ -825,6 +828,7 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
         source_image_path = image_paths[source_image]
         clip_plan["source_image_path"] = str(source_image_path)
         clips.append(clip_plan)
+        fallback_scene_count += 1
         video_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
         commands.append(
             " ".join(
@@ -851,11 +855,21 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
     final_output_path = str(full_episode.get("output_path") or f"renders/{episode_slug}/full-episode.mp4")
     commands.append(f"# Write approved scene paths to {shlex.quote(concat_list_path)} before final assembly.")
     commands.append(f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(concat_list_path)} -c copy {shlex.quote(final_output_path)}")
+    if generated_scene_count and not fallback_scene_count:
+        assembly_source = "generated_scene_videos"
+    elif generated_scene_count and fallback_scene_count:
+        assembly_source = "mixed_generated_and_static_fallback"
+    else:
+        assembly_source = "static_keyframe_fallback"
     render_plan = {
         "title": str(full_episode.get("title") or video_scenes.get("title") or "Untitled episode"),
         "episode_slug": episode_slug,
         "scene_count": len(clips),
         "duration_seconds": sum(int(clip["duration_seconds"]) for clip in clips),
+        "assembly_source": assembly_source,
+        "fallback_used": fallback_scene_count > 0,
+        "fallback_reason": "generated_scene_videos_missing" if fallback_scene_count > 0 else None,
+        "warning": "Full episode uses static keyframe fallback for at least one scene." if fallback_scene_count > 0 else None,
         "audio_plan_status": str(audio_plan.get("status") or "unknown"),
         "audio_format": str(audio_plan.get("format") or "unknown"),
         "clips": clips,
