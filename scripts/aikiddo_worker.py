@@ -421,10 +421,96 @@ def make_openai_storyboard_payload(manifest: dict[str, Any], brief: dict[str, An
     return payload
 
 
+def make_openai_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    storyboard = read_upstream_artifact_json(manifest, stage="storyboard.generate", artifact_id="storyboard_json")
+    character_bible = read_upstream_artifact_json(
+        manifest,
+        stage="characters.import_or_approve",
+        artifact_id="character_bible_json",
+    )
+    style_frame_prompt = read_upstream_artifact_text(
+        manifest,
+        stage="characters.import_or_approve",
+        artifact_id="style_frame_prompt_txt",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "topic", "frames", "status"],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "frames": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "id",
+                        "scene_id",
+                        "timestamp_seconds",
+                        "image_prompt",
+                        "composition",
+                        "continuity_note",
+                        "safety_note",
+                    ],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "scene_id": {"type": "string"},
+                        "timestamp_seconds": {"type": "integer"},
+                        "image_prompt": {"type": "string"},
+                        "composition": {"type": "string"},
+                        "continuity_note": {"type": "string"},
+                        "safety_note": {"type": "string"},
+                    },
+                },
+            },
+            "status": {"type": "string"},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "storyboard": storyboard,
+            "character_bible": character_bible,
+            "style_frame_prompt": style_frame_prompt,
+            "requirements": [
+                "Create inspectable keyframe prompts for each important storyboard beat.",
+                "Keep visual continuity with the approved character bible and style frame prompt.",
+                "Write image prompts that are preschool-safe and ready for a later image generator.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side keyframe prompt planner for Aikiddo kids music videos.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["status"] = "ready_for_visual_review"
+    prompt_lines = [str(frame["image_prompt"]).strip() for frame in payload["frames"]]
+    return payload, "\n".join(prompt_lines) + "\n"
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
-    if stage not in {"lyrics.generate", "characters.import_or_approve", "audio.generate_or_import", "storyboard.generate"}:
+    if stage not in {
+        "lyrics.generate",
+        "characters.import_or_approve",
+        "audio.generate_or_import",
+        "storyboard.generate",
+        "keyframes.generate",
+    }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
             "Set AIKIDDO_WORKER_MODE=deterministic only for local development."
@@ -535,16 +621,21 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "keyframes.generate":
-        frames = [
-            {"id": f"keyframe_{index:02d}", "scene_id": f"scene_{index:02d}", "prompt": f"{topic} preschool animation keyframe {index}"}
-            for index in range(1, 5)
-        ]
+        if worker_mode() == "deterministic":
+            frames = [
+                {"id": f"keyframe_{index:02d}", "scene_id": f"scene_{index:02d}", "prompt": f"{topic} preschool animation keyframe {index}"}
+                for index in range(1, 5)
+            ]
+            keyframes_payload = {"title": title, "topic": topic, "frames": frames, "status": "ready_for_visual_review"}
+            keyframe_prompts = "\n".join(frame["prompt"] for frame in frames) + "\n"
+        else:
+            keyframes_payload, keyframe_prompts = make_openai_keyframes_payload(manifest, brief)
         return [
             ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
             ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
         ], {
-            "keyframes.json": {"title": title, "topic": topic, "frames": frames, "status": "ready_for_visual_review"},
-            "keyframe_prompts.txt": "\n".join(frame["prompt"] for frame in frames) + "\n",
+            "keyframes.json": keyframes_payload,
+            "keyframe_prompts.txt": keyframe_prompts,
         }
 
     if stage == "video.scenes.generate":

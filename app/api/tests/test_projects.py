@@ -488,6 +488,134 @@ def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monk
     assert payloads["storyboard.json"]["safety_checks"] == ["no fear pressure", "no unsafe imitation", "no rapid flashes"]
 
 
+def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    character_job_dir = tmp_path / "character_job"
+    character_job_dir.mkdir()
+    (character_job_dir / "character_bible.json").write_text(
+        json.dumps({"characters": ["brush_friend_v1"], "visual_style": "soft 2D", "continuity_rules": ["same palette"]}),
+        encoding="utf-8",
+    )
+    (character_job_dir / "style_frame_prompt.txt").write_text(
+        "brush_friend_v1 in a safe bright bathroom classroom scene",
+        encoding="utf-8",
+    )
+    character_output_path = character_job_dir / "output_manifest.json"
+    character_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(character_job_dir),
+                "artifacts": [
+                    {"artifact_id": "character_bible_json", "filename": "character_bible.json"},
+                    {"artifact_id": "style_frame_prompt_txt", "filename": "style_frame_prompt.txt"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    storyboard_job_dir = tmp_path / "storyboard_job"
+    storyboard_job_dir.mkdir()
+    (storyboard_job_dir / "storyboard.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "scenes": [
+                    {
+                        "id": "scene_01_opening",
+                        "duration_seconds": 12,
+                        "action": "Brush friend waves beside the sink.",
+                        "visual_prompt": "soft 2D bathroom classroom, brush_friend_v1 waving",
+                        "lyric_reference": "Brush, brush",
+                        "safety_note": "No unsafe bathroom climbing.",
+                    }
+                ],
+                "safety_checks": ["no unsafe imitation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    storyboard_output_path = storyboard_job_dir / "output_manifest.json"
+    storyboard_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(storyboard_job_dir),
+                "artifacts": [{"artifact_id": "storyboard_json", "filename": "storyboard.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "keyframe prompt planner" in instructions
+        assert "scene_01_opening" in prompt
+        assert "brush_friend_v1 in a safe bright bathroom classroom scene" in prompt
+        assert schema["properties"]["frames"]["minItems"] == 3
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "status": "draft",
+            "frames": [
+                {
+                    "id": "keyframe_01",
+                    "scene_id": "scene_01_opening",
+                    "timestamp_seconds": 0,
+                    "image_prompt": "soft 2D keyframe of brush_friend_v1 waving beside a safe sink",
+                    "composition": "medium-wide shot, clear sink edge, calm background",
+                    "continuity_note": "keep the same brush_friend_v1 palette",
+                    "safety_note": "no climbing, no product claims",
+                },
+                {
+                    "id": "keyframe_02",
+                    "scene_id": "scene_01_opening",
+                    "timestamp_seconds": 4,
+                    "image_prompt": "gentle close keyframe of slow tooth brushing gesture",
+                    "composition": "waist-up view, simple mirror shape, no brand labels",
+                    "continuity_note": "same rounded style",
+                    "safety_note": "gentle motion only",
+                },
+                {
+                    "id": "keyframe_03",
+                    "scene_id": "scene_01_opening",
+                    "timestamp_seconds": 8,
+                    "image_prompt": "calm closing keyframe with brush_friend_v1 smiling near a clean sink",
+                    "composition": "centered character, soft classroom color accents",
+                    "continuity_note": "same proportions and colors",
+                    "safety_note": "preschool-safe bathroom framing",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "keyframes.generate",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_keyframes_provider",
+            "project_id": "project_keyframes_provider",
+            "stage": "keyframes.generate",
+            "pipeline_context": [
+                {"stage": "characters.import_or_approve", "output_manifest_path": str(character_output_path)},
+                {"stage": "storyboard.generate", "output_manifest_path": str(storyboard_output_path)},
+            ],
+        },
+    )
+
+    assert ("keyframes_json", "keyframes", "keyframes.json", "application/json") in descriptors
+    assert ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain") in descriptors
+    assert payloads["keyframes.json"]["status"] == "ready_for_visual_review"
+    assert payloads["keyframes.json"]["frames"][0]["id"] == "keyframe_01"
+    assert "soft 2D keyframe of brush_friend_v1" in payloads["keyframe_prompts.txt"]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [
