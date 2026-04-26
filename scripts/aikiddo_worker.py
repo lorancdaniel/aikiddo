@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Server-side Aikiddo worker.
 
-This script is intentionally dependency-light. The API sends it to the server
-next to a `job_manifest.json`; the worker owns all files it creates under the
-job directory and writes `output_manifest.json` as the stable API contract.
+The API sends this script to the remote job directory together with
+`job_manifest.json`. The worker owns all files it creates under that directory
+and writes `output_manifest.json` as the stable API contract.
 """
 
 from __future__ import annotations
@@ -20,11 +20,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-def build_audio_preview(job_dir: pathlib.Path, topic: str) -> pathlib.Path:
+def slugify(value: str) -> str:
+    return "-".join("".join(character.lower() if character.isalnum() else " " for character in value).split())
+
+
+def write_json(path: pathlib.Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def build_audio_preview(job_dir: pathlib.Path, topic: str, filename: str = "audio_preview.wav") -> pathlib.Path:
     sample_rate = 22050
     duration_sec = 2.0
     base_frequency = 330 + (len(topic) % 8) * 22
-    audio_path = job_dir / "audio_preview.wav"
+    audio_path = job_dir / filename
     with wave.open(str(audio_path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
@@ -53,10 +61,7 @@ def artifact_for(job_dir: pathlib.Path, manifest: dict[str, Any], artifact_id: s
     }
 
 
-def run(job_dir: pathlib.Path) -> dict[str, Any]:
-    manifest = json.loads((job_dir / "job_manifest.json").read_text(encoding="utf-8"))
-    brief = manifest["brief"]
-
+def make_lyrics_payload(brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     lyrics = "\n".join(
         [
             brief["title"],
@@ -74,7 +79,6 @@ def run(job_dir: pathlib.Path) -> dict[str, Any]:
         "title": brief["title"],
         "topic": brief["topic"],
         "age_range": brief["age_range"],
-        "stage": manifest["stage"],
         "duration_target_sec": 60,
         "sections": ["verse", "chorus"],
         "storage_policy": "server",
@@ -88,26 +92,223 @@ def run(job_dir: pathlib.Path) -> dict[str, Any]:
         ],
         "host": socket.gethostname(),
     }
+    return lyrics, song_plan, safety_notes
 
-    (job_dir / "lyrics.txt").write_text(lyrics, encoding="utf-8")
-    (job_dir / "song_plan.json").write_text(json.dumps(song_plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (job_dir / "safety_notes.json").write_text(json.dumps(safety_notes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    build_audio_preview(job_dir, brief["topic"])
 
+def stage_files(stage: str, brief: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], dict[str, Any]]:
+    topic = brief["topic"]
+    title = brief["title"]
+    age_range = brief["age_range"]
+    episode_slug = slugify(title) or "episode"
+
+    if stage == "brief.generate":
+        payload = {
+            "title": title,
+            "topic": topic,
+            "age_range": age_range,
+            "emotional_tone": brief["emotional_tone"],
+            "educational_goal": brief["educational_goal"],
+            "characters": brief.get("characters", []),
+            "safety_constraints": brief.get("forbidden_motifs", []),
+            "server_status": "ready_for_operator_review",
+        }
+        return [("episode_brief_json", "episode_brief", "episode_brief.json", "application/json")], {
+            "episode_brief.json": payload,
+        }
+
+    if stage == "lyrics.generate":
+        lyrics, song_plan, safety_notes = make_lyrics_payload(brief)
+        return [
+            ("lyrics_txt", "lyrics", "lyrics.txt", "text/plain"),
+            ("song_plan_json", "song_plan", "song_plan.json", "application/json"),
+            ("safety_notes_json", "safety_notes", "safety_notes.json", "application/json"),
+            ("audio_preview_wav", "audio_preview", "audio_preview.wav", "audio/wav"),
+        ], {
+            "lyrics.txt": lyrics,
+            "song_plan.json": song_plan,
+            "safety_notes.json": safety_notes,
+            "audio_preview.wav": {"kind": "audio"},
+        }
+
+    if stage == "characters.import_or_approve":
+        return [
+            ("character_bible_json", "character_bible", "character_bible.json", "application/json"),
+            ("style_frame_prompt_txt", "style_frame_prompt", "style_frame_prompt.txt", "text/plain"),
+        ], {
+            "character_bible.json": {
+                "characters": brief.get("characters", []) or ["hero_friend_v1"],
+                "visual_style": "soft preschool-safe animation",
+                "continuity_rules": ["same proportions", "same palette", "clear facial expressions"],
+                "approval_status": "ready_for_human_review",
+            },
+            "style_frame_prompt.txt": f"friendly preschool character set for {topic}, consistent design, safe gestures\n",
+        }
+
+    if stage == "audio.generate_or_import":
+        return [
+            ("audio_plan_json", "audio_plan", "audio_plan.json", "application/json"),
+            ("audio_preview_wav", "audio_preview", "audio_preview.wav", "audio/wav"),
+        ], {
+            "audio_plan.json": {
+                "title": title,
+                "tempo": "moderate",
+                "duration_target_sec": 60,
+                "loudness_policy": "child-safe gentle limiter",
+                "status": "preview_ready",
+            },
+            "audio_preview.wav": {"kind": "audio"},
+        }
+
+    if stage == "storyboard.generate":
+        scenes = [
+            {"id": "scene_01_opening", "duration_seconds": 12, "action": f"Introduce {topic} with a calm visual rhythm."},
+            {"id": "scene_02_discovery", "duration_seconds": 16, "action": "Show one learnable idea and invite repetition."},
+            {"id": "scene_03_repeat", "duration_seconds": 18, "action": "Return to the chorus with gentle movement."},
+            {"id": "scene_04_resolution", "duration_seconds": 14, "action": "Close the story without a cliffhanger."},
+        ]
+        return [("storyboard_json", "storyboard", "storyboard.json", "application/json")], {
+            "storyboard.json": {
+                "title": title,
+                "topic": topic,
+                "age_range": age_range,
+                "scenes": scenes,
+                "safety_checks": ["no fear pressure", "no unsafe imitation", "no rapid flashes"],
+            },
+        }
+
+    if stage == "keyframes.generate":
+        frames = [
+            {"id": f"keyframe_{index:02d}", "scene_id": f"scene_{index:02d}", "prompt": f"{topic} preschool animation keyframe {index}"}
+            for index in range(1, 5)
+        ]
+        return [
+            ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
+            ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
+        ], {
+            "keyframes.json": {"title": title, "topic": topic, "frames": frames, "status": "ready_for_visual_review"},
+            "keyframe_prompts.txt": "\n".join(frame["prompt"] for frame in frames) + "\n",
+        }
+
+    if stage == "video.scenes.generate":
+        clips = [
+            {"id": f"video_scene_{index:02d}", "source_keyframe_id": f"keyframe_{index:02d}", "duration_seconds": 8 + index}
+            for index in range(1, 5)
+        ]
+        return [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")], {
+            "video_scenes.json": {
+                "title": title,
+                "topic": topic,
+                "clips": clips,
+                "render_policy": "server-owned scene files",
+                "status": "ready_for_scene_review",
+            },
+        }
+
+    if stage == "render.full_episode":
+        return [
+            ("full_episode_json", "full_episode", "full_episode.json", "application/json"),
+            ("full_episode_placeholder_txt", "render_placeholder", "full_episode_placeholder.txt", "text/plain"),
+        ], {
+            "full_episode.json": {
+                "title": title,
+                "episode_slug": episode_slug,
+                "duration_seconds": 60,
+                "output_path": f"renders/{episode_slug}/full-episode.mp4",
+                "status": "server_render_manifest_ready",
+            },
+            "full_episode_placeholder.txt": f"Server render placeholder for {episode_slug}. Replace with FFmpeg output.\n",
+        }
+
+    if stage == "render.reels":
+        reels = [
+            {"id": "reel_01", "aspect_ratio": "9:16", "duration_seconds": 18, "output_path": f"renders/{episode_slug}/reel-01.mp4"},
+            {"id": "reel_02", "aspect_ratio": "9:16", "duration_seconds": 20, "output_path": f"renders/{episode_slug}/reel-02.mp4"},
+            {"id": "reel_03", "aspect_ratio": "9:16", "duration_seconds": 16, "output_path": f"renders/{episode_slug}/reel-03.mp4"},
+        ]
+        return [("reels_json", "reels", "reels.json", "application/json")], {
+            "reels.json": {"title": title, "topic": topic, "reels": reels, "status": "server_reel_manifests_ready"},
+        }
+
+    if stage == "quality.compliance_report":
+        return [("compliance_report_json", "compliance_report", "compliance_report.json", "application/json")], {
+            "compliance_report.json": {
+                "title": title,
+                "topic": topic,
+                "overall_status": "ready_for_human_review",
+                "checks": [
+                    {"id": "language", "status": "pass", "evidence": "simple supportive language"},
+                    {"id": "sensory", "status": "pass", "evidence": "calm pacing policy"},
+                    {"id": "publishing", "status": "review", "evidence": "operator must inspect final uploads"},
+                ],
+            },
+        }
+
+    if stage == "publish.prepare_package":
+        return [
+            ("publish_package_json", "publish_package", "publish_package.json", "application/json"),
+            ("upload_checklist_txt", "upload_checklist", "upload_checklist.txt", "text/plain"),
+        ], {
+            "publish_package.json": {
+                "title": title,
+                "package_path": f"publish/{episode_slug}",
+                "included_manifests": ["job_manifest.json", "output_manifest.json", "worker.log"],
+                "status": "ready_for_operator_upload",
+            },
+            "upload_checklist.txt": "Review title, description, thumbnail, made-for-kids setting, and final files before upload.\n",
+        }
+
+    return [("stage_manifest_json", "stage_manifest", "stage_manifest.json", "application/json")], {
+        "stage_manifest.json": {"title": title, "topic": topic, "stage": stage, "status": "generated"},
+    }
+
+
+def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: str, brief: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    descriptors, payloads = stage_files(stage, brief)
+    for filename, payload in payloads.items():
+        path = job_dir / filename
+        if filename.endswith(".json"):
+            write_json(path, payload)
+        elif filename.endswith(".wav"):
+            build_audio_preview(job_dir, brief["topic"], filename=filename)
+        else:
+            path.write_text(str(payload), encoding="utf-8")
     artifacts = [
-        artifact_for(job_dir, manifest, "lyrics_txt", "lyrics", "lyrics.txt", "text/plain"),
-        artifact_for(job_dir, manifest, "song_plan_json", "song_plan", "song_plan.json", "application/json"),
-        artifact_for(job_dir, manifest, "safety_notes_json", "safety_notes", "safety_notes.json", "application/json"),
-        artifact_for(job_dir, manifest, "audio_preview_wav", "audio_preview", "audio_preview.wav", "audio/wav"),
+        artifact_for(job_dir, manifest=manifest, artifact_id=artifact_id, artifact_type=artifact_type, filename=filename, mime_type=mime_type)
+        for artifact_id, artifact_type, filename, mime_type in descriptors
     ]
+    preview = {
+        "title": brief["title"],
+        "lyrics": payloads.get("lyrics.txt", f"{stage} generated server-side for {brief['title']}.\n"),
+        "song_plan": {
+            "stage": stage,
+            "topic": brief["topic"],
+            "artifact_count": len(artifacts),
+            "storage_policy": "server",
+        },
+        "safety_notes": [
+            "server-owned generation",
+            "human review remains required for gated stages",
+            "no direct publishing without operator approval",
+        ],
+    }
+    logs = [f"server worker wrote {filename}" for _, _, filename, _ in descriptors]
+    return artifacts, preview, logs
+
+
+def run(job_dir: pathlib.Path) -> dict[str, Any]:
+    manifest = json.loads((job_dir / "job_manifest.json").read_text(encoding="utf-8"))
+    brief = manifest["brief"]
+    stage = manifest["stage"]
+    artifacts, preview, logs = write_stage_outputs(job_dir, manifest, stage, brief)
+
     worker_log = job_dir / "worker.log"
     worker_log.write_text(
         "\n".join(
             [
                 "job=" + manifest["job_id"],
-                "stage=" + manifest["stage"],
+                "stage=" + stage,
                 "runner=aikiddo_worker.py",
-                "artifacts=lyrics.txt,song_plan.json,safety_notes.json,audio_preview.wav",
+                "artifacts=" + ",".join(artifact["filename"] for artifact in artifacts),
                 "storage=server",
             ]
         )
@@ -119,34 +320,22 @@ def run(job_dir: pathlib.Path) -> dict[str, Any]:
         "schema_version": "output.v1",
         "job_id": manifest["job_id"],
         "project_id": manifest["project_id"],
-        "stage": manifest["stage"],
+        "stage": stage,
         "status": "completed",
         "adapter": "ssh",
         "storage_policy": "server",
         "remote_job_dir": str(job_dir),
         "output_files": [artifact["storage_key"] for artifact in artifacts],
         "artifacts": artifacts,
-        "preview": {
-            "title": brief["title"],
-            "lyrics": lyrics,
-            "song_plan": {**song_plan, "audio_preview": "audio_preview.wav"},
-            "safety_notes": safety_notes["checks"],
-        },
-        "logs": [
-            "server worker wrote job_manifest.json",
-            "server worker wrote lyrics.txt",
-            "server worker wrote song_plan.json",
-            "server worker wrote safety_notes.json",
-            "server worker wrote audio_preview.wav",
-        ],
+        "preview": preview,
+        "logs": ["server worker wrote job_manifest.json", *logs],
         "log": {
             "storage_key": "projects/" + manifest["project_id"] + "/jobs/" + manifest["job_id"] + "/worker.log",
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-    (job_dir / "output_manifest.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(job_dir / "output_manifest.json", output)
     return output
-
 
 def main() -> int:
     if len(sys.argv) != 2:

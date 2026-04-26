@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from studio_api.main import create_app
@@ -217,6 +218,68 @@ def test_aikiddo_worker_writes_server_output_contract(tmp_path: Path) -> None:
     assert (job_dir / "safety_notes.json").exists()
     assert (job_dir / "audio_preview.wav").exists()
     assert "runner=aikiddo_worker.py" in (job_dir / "worker.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_artifact_id"),
+    [
+        ("brief.generate", "episode_brief_json"),
+        ("lyrics.generate", "lyrics_txt"),
+        ("characters.import_or_approve", "character_bible_json"),
+        ("audio.generate_or_import", "audio_plan_json"),
+        ("storyboard.generate", "storyboard_json"),
+        ("keyframes.generate", "keyframes_json"),
+        ("video.scenes.generate", "video_scenes_json"),
+        ("render.full_episode", "full_episode_json"),
+        ("render.reels", "reels_json"),
+        ("quality.compliance_report", "compliance_report_json"),
+        ("publish.prepare_package", "publish_package_json"),
+    ],
+)
+def test_aikiddo_worker_is_stage_aware(tmp_path: Path, stage: str, expected_artifact_id: str) -> None:
+    job_dir = tmp_path / stage.replace(".", "_").replace("/", "_")
+    job_dir.mkdir()
+    manifest = {
+        "schema_version": "job.v1",
+        "job_id": f"remote_{stage.replace('.', '_')}",
+        "project_id": "project_contract",
+        "stage": stage,
+        "job_type": "kids_song_pilot",
+        "adapter": "ssh",
+        "brief": {
+            "id": "brief_contract",
+            "title": "Colors Song",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": ["brush_friend_v1"],
+            "forbidden_motifs": ["fear pressure"],
+            "created_at": "2026-04-26T00:00:00+00:00",
+        },
+        "created_at": "2026-04-26T00:00:00+00:00",
+    }
+    (job_dir / "job_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
+    result = subprocess.run(
+        [sys.executable, str(worker_path), str(job_dir)],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    output = json.loads((job_dir / "output_manifest.json").read_text(encoding="utf-8"))
+    assert output["stage"] == stage
+    assert output["status"] == "completed"
+    assert output["preview"]["song_plan"]["stage"] == stage
+    assert expected_artifact_id in [artifact["artifact_id"] for artifact in output["artifacts"]]
+    assert all((job_dir / artifact["filename"]).exists() for artifact in output["artifacts"])
+    worker_log = (job_dir / "worker.log").read_text(encoding="utf-8")
+    assert f"stage={stage}" in worker_log
+    assert "storage=server" in worker_log
 
 
 def test_health_reports_mock_adapter(tmp_path: Path) -> None:
