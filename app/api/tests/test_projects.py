@@ -161,7 +161,7 @@ def test_health_reports_mock_adapter(tmp_path: Path) -> None:
     assert response.json() == {"status": "ok", "adapter": "mock"}
 
 
-def test_remote_pilot_requires_ssh_profile(tmp_path: Path) -> None:
+def test_remote_pilot_endpoint_is_retired(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     project = client.post(
         "/api/projects",
@@ -176,12 +176,14 @@ def test_remote_pilot_requires_ssh_profile(tmp_path: Path) -> None:
     ).json()
 
     response = client.post(f"/api/projects/{project['id']}/remote-pilot", json={"stage": "lyrics.generate"})
+    read_response = client.get(f"/api/projects/{project['id']}/remote-pilot")
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "SSH server profile is required for remote generation"
+    assert response.status_code == 410
+    assert read_response.status_code == 410
+    assert response.json()["detail"] == "Remote pilot endpoint is retired; use project jobs instead"
 
 
-def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatch) -> None:
+def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypatch) -> None:
     client = make_client(tmp_path)
     project = client.post(
         "/api/projects",
@@ -194,6 +196,7 @@ def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatc
             "characters": [],
         },
     ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
     client.put(
         "/api/server/profile",
         json={
@@ -224,29 +227,24 @@ def test_remote_pilot_writes_job_manifest_through_ssh(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
 
-    response = client.post(f"/api/projects/{project['id']}/remote-pilot", json={"stage": "lyrics.generate"})
+    response = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate")
 
     assert response.status_code == 202
-    pilot = response.json()
-    assert pilot["adapter"] == "ssh"
-    assert pilot["status"] == "completed"
-    assert pilot["stage"] == "lyrics.generate"
-    assert pilot["schema_version"] == "output.v1"
-    assert pilot["preview"]["lyrics"] == "Colors in the rhythm\n"
-    assert [artifact["artifact_id"] for artifact in pilot["artifacts"]] == [
+    job = response.json()
+    assert job["adapter"] == "ssh"
+    assert job["status"] == "needs_review"
+    assert job["stage"] == "lyrics.generate"
+    detail = client.get(f"/api/jobs/{job['id']}").json()
+    assert detail["preview"]["lyrics"] == "Colors in the rhythm\n"
+    assert [artifact["artifact_id"] for artifact in detail["artifacts"]] == [
         "lyrics_txt",
         "song_plan_json",
         "safety_notes_json",
         "audio_preview_wav",
     ]
-    assert pilot["output_files"] == [
-        f"projects/{project['id']}/jobs/remote_job_from_fixture/lyrics.txt",
-        f"projects/{project['id']}/jobs/remote_job_from_fixture/song_plan.json",
-        f"projects/{project['id']}/jobs/remote_job_from_fixture/safety_notes.json",
-        f"projects/{project['id']}/jobs/remote_job_from_fixture/audio_preview.wav",
-    ]
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
-    assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+    assert not (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+    assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
 
 def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, monkeypatch) -> None:
@@ -302,7 +300,7 @@ def test_submit_job_uses_ssh_runner_when_profile_is_server_mode(tmp_path: Path, 
     assert job["id"].startswith("remote_")
     assert lyrics_stage["status"] == "needs_review"
     assert not (tmp_path / "projects" / project["id"] / "lyrics.json").exists()
-    assert (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
+    assert not (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
 

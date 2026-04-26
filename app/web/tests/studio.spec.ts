@@ -5,8 +5,8 @@ test("operator sees a server-first generation cockpit", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Studio piosenek i klipów AI" })).toBeVisible();
   await expect(page.getByText("generowanie na serwerze")).toBeVisible();
-  await expect(page.getByTestId("remote-pilot")).toContainText("Generacja serwerowa");
-  await expect(page.getByTestId("remote-pilot")).toContainText("Zapisz profil serwera");
+  await expect(page.getByTestId("server-generation")).toContainText("Generacja serwerowa");
+  await expect(page.getByTestId("server-generation")).toContainText("Zapisz profil serwera");
   await expect(page.getByText("Mock", { exact: false })).toHaveCount(0);
   await expect(page.getByText("mock", { exact: false })).toHaveCount(0);
 
@@ -19,7 +19,7 @@ test("operator sees a server-first generation cockpit", async ({ page }) => {
   await page.getByRole("button", { name: "Utwórz projekt" }).click();
 
   await expect(page.getByTestId("selected-project-title")).toContainText("Szczoteczka bohater");
-  await expect(page.getByTestId("remote-pilot").getByRole("button", { name: "Generuj na serwerze" })).toBeDisabled();
+  await expect(page.getByTestId("server-generation").getByRole("button", { name: "Generuj na serwerze" })).toBeDisabled();
   await expect(page.getByTestId("run-lyrics-button")).toBeDisabled();
 
   await expect(page.getByLabel("Nazwa profilu")).toHaveValue("Production GPU worker");

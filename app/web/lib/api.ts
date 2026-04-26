@@ -301,25 +301,6 @@ export type StaleLockRecoveryResult = {
   } | null;
 };
 
-export type RemotePilotRun = {
-  id: string;
-  project_id: string;
-  stage: string;
-  schema_version: string;
-  status: "completed" | "failed";
-  adapter: "ssh";
-  remote_job_dir: string;
-  job_manifest_path: string;
-  output_manifest_path: string;
-  output_files: string[];
-  artifacts: GenerationArtifact[];
-  preview: GenerationPreview | null;
-  message: string;
-  logs: string[];
-  created_at: string;
-  updated_at: string;
-};
-
 export type JobLog = {
   job_id: string;
   log: string;
@@ -587,17 +568,6 @@ export function saveServerProfile(input: ServerProfileInput) {
   return request<ServerProfile>("/api/server/profile", {
     method: "PUT",
     body: JSON.stringify(input)
-  });
-}
-
-export function fetchRemotePilot(projectId: string) {
-  return request<RemotePilotRun>(`/api/projects/${projectId}/remote-pilot`);
-}
-
-export function runRemotePilot(projectId: string, stage = "lyrics.generate") {
-  return request<RemotePilotRun>(`/api/projects/${projectId}/remote-pilot`, {
-    method: "POST",
-    body: JSON.stringify({ stage })
   });
 }
 

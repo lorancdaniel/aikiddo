@@ -29,7 +29,6 @@ import {
   fetchProjectNextAction,
   fetchPublishPackageArtifact,
   fetchAntiRepetitionReport,
-  fetchRemotePilot,
   fetchProjects,
   fetchSeries,
   fetchLyricsArtifact,
@@ -52,7 +51,6 @@ import {
   ProjectNextAction,
   PublishPackageArtifact,
   ReelsArtifact,
-  RemotePilotRun,
   runAntiRepetition,
   runStage,
   saveEpisodeSpec,
@@ -212,7 +210,6 @@ export default function Home() {
   const [complianceReportArtifact, setComplianceReportArtifact] = useState<ComplianceReportArtifact | null>(null);
   const [publishPackageArtifact, setPublishPackageArtifact] = useState<PublishPackageArtifact | null>(null);
   const [antiRepetitionReport, setAntiRepetitionReport] = useState<AntiRepetitionReport | null>(null);
-  const [remotePilotRun, setRemotePilotRun] = useState<RemotePilotRun | null>(null);
   const [serverJobDetail, setServerJobDetail] = useState<GenerationJobDetail | null>(null);
   const [serverArtifacts, setServerArtifacts] = useState<GenerationArtifact[]>([]);
   const [serverLog, setServerLog] = useState<JobLog | null>(null);
@@ -249,7 +246,6 @@ export default function Home() {
   const [isSavingEpisodeSpec, setIsSavingEpisodeSpec] = useState(false);
   const [isApprovingEpisodeSpec, setIsApprovingEpisodeSpec] = useState(false);
   const [isRunningAntiRepetition, setIsRunningAntiRepetition] = useState(false);
-  const [isRunningRemotePilot, setIsRunningRemotePilot] = useState(false);
   const [runningStage, setRunningStage] = useState<string | null>(null);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [approvingStage, setApprovingStage] = useState<string | null>(null);
@@ -429,30 +425,41 @@ export default function Home() {
     } catch {
       setAntiRepetitionReport(null);
     }
+
+    let jobsForProject: Job[] = [];
     try {
-      const remoteRun = await fetchRemotePilot(projectId);
-      setRemotePilotRun(remoteRun);
+      jobsForProject = await fetchProjectJobs(projectId);
+      setProjectJobs(jobsForProject);
+    } catch {
+      jobsForProject = [];
+      setProjectJobs([]);
+    }
+
+    const latestServerJob = [...jobsForProject].reverse().find((job) => job.adapter === "ssh") ?? null;
+    if (latestServerJob) {
       try {
-        const jobDetail = await fetchJobDetail(remoteRun.id);
+        const jobDetail = await fetchJobDetail(latestServerJob.id);
         setServerJobDetail(jobDetail);
         setServerArtifacts(jobDetail.artifacts);
         setServerEvents(await fetchJobEvents(jobDetail.id));
+        try {
+          setServerArtifacts(await fetchJobArtifacts(projectId, latestServerJob.id));
+        } catch {
+          setServerArtifacts(jobDetail.artifacts);
+        }
+        try {
+          setServerLog(await fetchJobLog(projectId, latestServerJob.id));
+        } catch {
+          setServerLog(null);
+        }
       } catch {
         setServerJobDetail(null);
+        setServerArtifacts([]);
+        setServerLog(null);
         setServerEvents([]);
+        setArtifactPreview(null);
       }
-      try {
-        setServerArtifacts(await fetchJobArtifacts(projectId, remoteRun.id));
-      } catch {
-        setServerArtifacts(remoteRun.artifacts);
-      }
-      try {
-        setServerLog(await fetchJobLog(projectId, remoteRun.id));
-      } catch {
-        setServerLog({ job_id: remoteRun.id, log: remoteRun.logs.join("\n"), lines: remoteRun.logs });
-      }
-    } catch {
-      setRemotePilotRun(null);
+    } else {
       setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
@@ -468,11 +475,6 @@ export default function Home() {
       setArtifactInventory(await fetchArtifactInventory(projectId));
     } catch {
       setArtifactInventory([]);
-    }
-    try {
-      setProjectJobs(await fetchProjectJobs(projectId));
-    } catch {
-      setProjectJobs([]);
     }
     try {
       setStageApprovals(await fetchProjectApprovals(projectId));
@@ -513,7 +515,6 @@ export default function Home() {
       setComplianceReportArtifact(null);
       setPublishPackageArtifact(null);
       setAntiRepetitionReport(null);
-      setRemotePilotRun(null);
       setServerJobDetail(null);
       setServerArtifacts([]);
       setServerLog(null);
@@ -572,17 +573,11 @@ export default function Home() {
     }
   }
 
-  async function handleRunRemotePilot() {
-    setIsRunningRemotePilot(true);
-    await handleRunStage("lyrics.generate");
-    setIsRunningRemotePilot(false);
-  }
-
   async function handlePreviewArtifact(artifact: GenerationArtifact) {
-    if (!selectedProject || !remotePilotRun) return;
+    if (!selectedProject || !serverJobDetail) return;
     setError("");
     try {
-      const content = await fetchJobArtifactText(selectedProject.id, remotePilotRun.id, artifact.artifact_id);
+      const content = await fetchJobArtifactText(selectedProject.id, serverJobDetail.id, artifact.artifact_id);
       setArtifactPreview({ artifactId: artifact.artifact_id, content });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Nie udało się pobrać artefaktu z serwera.");
@@ -860,7 +855,7 @@ export default function Home() {
             <p className="text-sm font-bold">{connection?.message ?? "Sprawdzam profil serwera..."}</p>
             <p className="mt-5 text-5xl font-black">{connection?.reachable ? "ready" : "wait"}</p>
           </div>
-          <div className="mt-5 rounded-2xl border border-white/10 bg-black/22 p-4" data-testid="remote-pilot">
+          <div className="mt-5 rounded-2xl border border-white/10 bg-black/22 p-4" data-testid="server-generation">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-lg font-black">Generacja serwerowa</p>
@@ -870,17 +865,17 @@ export default function Home() {
                     : "Zapisz profil serwera, żeby uruchamiać generacje."}
                 </p>
               </div>
-              <span className={`status-pill ${serverJobDetail?.status === "failed" || remotePilotRun?.status === "failed" ? "bg-[var(--coral)] text-white" : "bg-white/10 text-white/70"}`}>
-                {serverJobDetail?.status ?? remotePilotRun?.status ?? "idle"}
+              <span className={`status-pill ${serverJobDetail?.status === "failed" ? "bg-[var(--coral)] text-white" : "bg-white/10 text-white/70"}`}>
+                {serverJobDetail?.status ?? "idle"}
               </span>
             </div>
             <button
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-black text-[var(--ink)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
               type="button"
-              onClick={handleRunRemotePilot}
-              disabled={!selectedProject || serverProfile?.mode !== "ssh" || isRunningRemotePilot || runningStage !== null || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
+              onClick={() => handleRunStage("lyrics.generate")}
+              disabled={!selectedProject || serverProfile?.mode !== "ssh" || runningStage !== null || getStageStatus(selectedProject, "lyrics.generate") !== "pending"}
             >
-              {isRunningRemotePilot || runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+              {runningStage === "lyrics.generate" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               Generuj na serwerze
             </button>
             {queueStatus ? (
@@ -897,12 +892,12 @@ export default function Home() {
                 </div>
               </div>
             ) : null}
-            {remotePilotRun || serverJobDetail ? (
+            {serverJobDetail ? (
               <div className="mt-4 grid gap-3 text-sm text-white/68">
                 <div className="rounded-xl bg-white/7 p-3">
                   <p className="font-black text-white">Job</p>
-                  <p className="mt-1 break-all text-xs text-white/48">{serverJobDetail?.id ?? remotePilotRun?.id}</p>
-                  {serverJobDetail ? <p className="mt-2 text-xs font-bold text-white/42">{serverJobDetail.phase}</p> : null}
+                  <p className="mt-1 break-all text-xs text-white/48">{serverJobDetail.id}</p>
+                  <p className="mt-2 text-xs font-bold text-white/42">{serverJobDetail.phase}</p>
                   {serverJobDetail?.runner ? (
                     <div className="mt-2 flex flex-wrap gap-2 text-xs font-black">
                       <span className="rounded-full bg-white/10 px-2 py-1 text-white/54">
@@ -936,14 +931,14 @@ export default function Home() {
                     </div>
                   ) : null}
                 </div>
-                {(serverJobDetail?.preview ?? remotePilotRun?.preview) ? (
+                {serverJobDetail.preview ? (
                   <div className="rounded-xl border border-white/10 bg-white/7 p-3" data-testid="server-preview">
-                    <p className="font-black text-white">{(serverJobDetail?.preview ?? remotePilotRun?.preview)?.title}</p>
+                    <p className="font-black text-white">{serverJobDetail.preview.title}</p>
                     <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-white/62">
-                      {(serverJobDetail?.preview ?? remotePilotRun?.preview)?.lyrics}
+                      {serverJobDetail.preview.lyrics}
                     </pre>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {(serverJobDetail?.preview ?? remotePilotRun?.preview)?.safety_notes.map((note) => (
+                      {serverJobDetail.preview.safety_notes.map((note) => (
                         <span key={note} className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white/62">
                           {note}
                         </span>
@@ -955,10 +950,9 @@ export default function Home() {
                   <div className="grid gap-2">
                     {serverArtifacts.map((artifact) => {
                       const canPreview = artifact.mime_type.startsWith("text/") || artifact.mime_type === "application/json";
-                      const jobId = serverJobDetail?.id ?? remotePilotRun?.id;
                       const downloadUrl =
-                        selectedProject && jobId
-                          ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${jobId}/artifacts/${artifact.artifact_id}`)
+                        selectedProject
+                          ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${serverJobDetail.id}/artifacts/${artifact.artifact_id}`)
                           : "";
 
                       return (
@@ -995,14 +989,6 @@ export default function Home() {
                       );
                     })}
                   </div>
-                ) : remotePilotRun?.output_files.length ? (
-                  <div className="grid gap-2">
-                    {remotePilotRun.output_files.map((file) => (
-                      <p key={file} className="break-all rounded-xl bg-[var(--mist)] px-3 py-2 text-xs font-bold text-[var(--ink)]">
-                        {fileNameFromPath(file)}
-                      </p>
-                    ))}
-                  </div>
                 ) : null}
                 {artifactPreview ? (
                   <div className="rounded-xl border border-[var(--acid)]/30 bg-[var(--acid)]/10 p-3">
@@ -1012,11 +998,11 @@ export default function Home() {
                     </pre>
                   </div>
                 ) : null}
-                {(serverLog?.lines.length ?? remotePilotRun?.logs.length ?? 0) ? (
+                {serverLog?.lines.length ? (
                   <div className="rounded-xl border border-white/10 bg-black/22 p-3">
                     <p className="font-black text-white">Log</p>
                     <div className="mt-2 space-y-1 text-xs text-white/52">
-                      {(serverLog?.lines ?? remotePilotRun?.logs ?? []).map((line) => (
+                      {serverLog.lines.map((line) => (
                         <p key={line}>{line}</p>
                       ))}
                     </div>

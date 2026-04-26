@@ -15,7 +15,6 @@ ARTIFACT_MANIFESTS = [
     ("reels", "reels.json"),
     ("compliance_report", "compliance-report.json"),
     ("anti_repetition", "anti-repetition.json"),
-    ("remote_pilot", "remote-pilot.json"),
     ("publish_package", "publish-package.json"),
 ]
 
@@ -287,10 +286,6 @@ class ProjectStorage:
             json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        (self.project_dir(project_id) / "remote-pilot.json").write_text(
-            json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
         return run
 
     def get_remote_pilot_run(self, project_id: str, run_id: str | None = None) -> RemotePilotRun | None:
@@ -299,10 +294,7 @@ class ProjectStorage:
             if not run_file.exists():
                 return None
             return RemotePilotRun.model_validate_json(run_file.read_text(encoding="utf-8"))
-        run_file = self.project_dir(project_id) / "remote-pilot.json"
-        if not run_file.exists():
-            return None
-        return RemotePilotRun.model_validate_json(run_file.read_text(encoding="utf-8"))
+        return None
 
     def list_artifacts(self, project_id: str) -> list[ArtifactInventoryItem]:
         project_dir = self.project_dir(project_id)

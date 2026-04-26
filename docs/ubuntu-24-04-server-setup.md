@@ -130,6 +130,8 @@ The token is required for:
 
 If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
+Do not use the old `/api/projects/{project_id}/remote-pilot` path for production work. It is retired and returns `410 Gone`; the app should create generation work through `POST /api/projects/{project_id}/jobs/{stage}` and read progress through job detail, events, logs, and artifacts.
+
 Frontend:
 
 ```bash
@@ -175,6 +177,7 @@ Goal:
 - Configure and verify the existing Next.js + FastAPI app from this repository.
 - Use the SSH/server-owned generation path.
 - Keep mock generation only as a local fallback.
+- Do not revive the retired /api/projects/{project_id}/remote-pilot flow.
 - Do not rename technical stage_id values.
 
 Stack:

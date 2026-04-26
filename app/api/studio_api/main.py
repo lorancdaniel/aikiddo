@@ -35,8 +35,6 @@ from .models import (
     ProjectSeriesLinkInput,
     PublishPackageArtifact,
     ReelsArtifact,
-    RemotePilotInput,
-    RemotePilotRun,
     ServerProfile,
     ServerProfileInput,
     STAGE_DISPLAY_CATALOG,
@@ -496,26 +494,19 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
     def save_server_profile(profile_input: ServerProfileInput) -> ServerProfile:
         return storage.save_server_profile(profile_input)
 
-    @app.get("/api/projects/{project_id}/remote-pilot", response_model=RemotePilotRun)
-    def get_remote_pilot(project_id: str) -> RemotePilotRun:
+    @app.get("/api/projects/{project_id}/remote-pilot")
+    def get_remote_pilot(project_id: str):
         project = storage.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        run = storage.get_remote_pilot_run(project_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Remote pilot not found")
-        return run
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Remote pilot endpoint is retired; use project jobs instead")
 
-    @app.post("/api/projects/{project_id}/remote-pilot", response_model=RemotePilotRun, status_code=status.HTTP_202_ACCEPTED)
-    def run_remote_pilot(project_id: str, pilot_input: RemotePilotInput) -> RemotePilotRun:
+    @app.post("/api/projects/{project_id}/remote-pilot")
+    def run_remote_pilot(project_id: str):
         project = storage.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        profile = storage.get_server_profile()
-        if profile is None or profile.mode != "ssh":
-            raise HTTPException(status_code=409, detail="SSH server profile is required for remote generation")
-        run = ssh_server.run_remote_pilot(project_id=project_id, brief=project.brief, stage=pilot_input.stage, profile=profile)
-        return storage.save_remote_pilot_run(project_id, run)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Remote pilot endpoint is retired; use project jobs instead")
 
     @app.post("/api/projects/{project_id}/jobs/{stage}", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
     def submit_job(project_id: str, stage: str) -> Job:
