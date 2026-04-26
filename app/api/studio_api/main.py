@@ -1,8 +1,9 @@
 from pathlib import Path
 import os
+import secrets
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, Header, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .anti_repetition import build_anti_repetition_report
@@ -150,6 +151,7 @@ def normalize_job_status(status_value: StageStatus) -> tuple[str, str]:
 
 
 SSH_WORKER_RESOURCE = "ssh_default"
+ADMIN_TOKEN_ENV = "STUDIO_ADMIN_TOKEN"
 
 
 def create_app(projects_root: Path | None = None) -> FastAPI:
@@ -175,6 +177,15 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             if queued_job.id == job.id:
                 return index
         return 0
+
+    def require_admin_token(x_studio_admin_token: str | None) -> None:
+        expected = os.getenv(ADMIN_TOKEN_ENV)
+        if not expected:
+            raise HTTPException(status_code=503, detail="Studio admin token is not configured")
+        if x_studio_admin_token is None:
+            raise HTTPException(status_code=401, detail="Invalid studio admin token")
+        if not secrets.compare_digest(x_studio_admin_token, expected):
+            raise HTTPException(status_code=403, detail="Invalid studio admin token")
 
     def recover_stale_worker_lock(resource_key: str) -> StaleLockRecoveryResult:
         lock = storage.get_worker_lock_raw(resource_key)
@@ -578,13 +589,15 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         return job
 
     @app.post("/api/jobs/dispatch-next", response_model=DispatchNextResult)
-    def dispatch_next_job(dispatch_input: DispatchNextInput) -> DispatchNextResult:
+    def dispatch_next_job(dispatch_input: DispatchNextInput, x_studio_admin_token: str | None = Header(default=None)) -> DispatchNextResult:
+        require_admin_token(x_studio_admin_token)
         if dispatch_input.adapter != "ssh" or dispatch_input.resource != SSH_WORKER_RESOURCE:
             return DispatchNextResult(status="idle", reason="unsupported_resource")
         return dispatch_next_ssh_job(trigger="manual", drain_remaining=True)
 
     @app.post("/api/jobs/locks/heartbeat", response_model=LockHeartbeatResult)
-    def heartbeat_worker_lock(heartbeat_input: LockHeartbeatInput) -> LockHeartbeatResult:
+    def heartbeat_worker_lock(heartbeat_input: LockHeartbeatInput, x_studio_admin_token: str | None = Header(default=None)) -> LockHeartbeatResult:
+        require_admin_token(x_studio_admin_token)
         if heartbeat_input.adapter != "ssh" or heartbeat_input.resource_key != SSH_WORKER_RESOURCE:
             return LockHeartbeatResult(status="rejected", reason="unsupported_resource")
         recover_stale_worker_lock(SSH_WORKER_RESOURCE)
@@ -602,7 +615,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         return LockHeartbeatResult(status="renewed", heartbeat_at=lock.heartbeat_at, lease_expires_at=lock.lease_expires_at)
 
     @app.post("/api/jobs/locks/recover-stale", response_model=StaleLockRecoveryResult)
-    def recover_stale_lock(recovery_input: StaleLockRecoveryInput) -> StaleLockRecoveryResult:
+    def recover_stale_lock(recovery_input: StaleLockRecoveryInput, x_studio_admin_token: str | None = Header(default=None)) -> StaleLockRecoveryResult:
+        require_admin_token(x_studio_admin_token)
         if recovery_input.adapter != "ssh" or recovery_input.resource_key != SSH_WORKER_RESOURCE:
             return StaleLockRecoveryResult(status="idle", reason="unsupported_resource")
         result = recover_stale_worker_lock(recovery_input.resource_key)

@@ -380,6 +380,7 @@ def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypa
 
 
 def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STUDIO_ADMIN_TOKEN", "test-admin-token")
     client = make_client(tmp_path)
     project = client.post(
         "/api/projects",
@@ -438,7 +439,11 @@ def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -
 
     queued_job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
     lock_file.unlink()
-    response = client.post("/api/jobs/dispatch-next", json={"adapter": "ssh", "resource": "ssh_default"})
+    response = client.post(
+        "/api/jobs/dispatch-next",
+        json={"adapter": "ssh", "resource": "ssh_default"},
+        headers={"X-Studio-Admin-Token": "test-admin-token"},
+    )
 
     assert response.status_code == 200
     result = response.json()
@@ -578,6 +583,7 @@ def test_submit_job_auto_drains_existing_ssh_queue_before_new_job(tmp_path: Path
 
 
 def test_expired_ssh_lock_fails_stale_job_and_allows_next_dispatch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STUDIO_ADMIN_TOKEN", "test-admin-token")
     client = make_client(tmp_path)
     series = create_minimal_series(client)
     stale_project = create_project_with_episode_spec(
@@ -668,6 +674,7 @@ def test_expired_ssh_lock_fails_stale_job_and_allows_next_dispatch(tmp_path: Pat
             "lock_id": "lock_stale_test",
             "attempt_id": stale_job["attempt_id"],
         },
+        headers={"X-Studio-Admin-Token": "test-admin-token"},
     ).json()
     assert heartbeat["status"] == "renewed"
     assert heartbeat["heartbeat_at"] is not None
@@ -717,7 +724,39 @@ def test_expired_ssh_lock_fails_stale_job_and_allows_next_dispatch(tmp_path: Pat
     assert not lock_file.exists()
 
 
-def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path) -> None:
+def test_dispatch_next_requires_admin_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STUDIO_ADMIN_TOKEN", "test-admin-token")
+    client = make_client(tmp_path)
+
+    missing = client.post("/api/jobs/dispatch-next", json={"adapter": "ssh", "resource": "ssh_default"})
+    wrong = client.post(
+        "/api/jobs/locks/recover-stale",
+        json={"adapter": "ssh", "resource_key": "ssh_default"},
+        headers={"X-Studio-Admin-Token": "wrong-token"},
+    )
+
+    assert missing.status_code == 401
+    assert missing.json()["detail"] == "Invalid studio admin token"
+    assert wrong.status_code == 403
+    assert wrong.json()["detail"] == "Invalid studio admin token"
+
+
+def test_dispatch_next_is_fail_closed_without_configured_admin_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("STUDIO_ADMIN_TOKEN", raising=False)
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/api/jobs/dispatch-next",
+        json={"adapter": "ssh", "resource": "ssh_default"},
+        headers={"X-Studio-Admin-Token": "test-admin-token"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Studio admin token is not configured"
+
+
+def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STUDIO_ADMIN_TOKEN", "test-admin-token")
     client = make_client(tmp_path)
     client.put(
         "/api/server/profile",
@@ -733,7 +772,11 @@ def test_dispatch_next_is_idle_without_queued_ssh_jobs(tmp_path: Path) -> None:
         },
     )
 
-    response = client.post("/api/jobs/dispatch-next", json={"adapter": "ssh", "resource": "ssh_default"})
+    response = client.post(
+        "/api/jobs/dispatch-next",
+        json={"adapter": "ssh", "resource": "ssh_default"},
+        headers={"X-Studio-Admin-Token": "test-admin-token"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {

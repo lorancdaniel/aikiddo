@@ -9,7 +9,7 @@ Target server seen from the Mac:
 - SSH port: `22`
 - App repo: `https://github.com/lorancdaniel/aikiddo.git`
 
-The app starts with the mock pipeline only. Do not wire the real GPU worker yet.
+The app now runs server-owned SSH generation. The old mock path is still present only as a local fallback; production-style operation should use the SSH server profile and server-side artifacts.
 
 ## 1. Add Mac SSH Key To The Server
 
@@ -114,6 +114,22 @@ pip install -r requirements.txt -r requirements-dev.txt
 python3 -m pytest -q
 ```
 
+Create the backend admin token used by SSH worker control endpoints:
+
+```bash
+cd ~/aikiddo/app/api
+umask 077
+printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env.ops
+```
+
+The token is required for:
+
+- `POST /api/jobs/dispatch-next`
+- `POST /api/jobs/locks/heartbeat`
+- `POST /api/jobs/locks/recover-stale`
+
+If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
+
 Frontend:
 
 ```bash
@@ -124,13 +140,14 @@ npm run build
 npm run test:e2e
 ```
 
-## 5. Run Mock App
+## 5. Run Server-Owned App
 
 Terminal 1, backend:
 
 ```bash
 cd ~/aikiddo/app/api
 source .venv/bin/activate
+source .env.ops
 python3 -m uvicorn studio_api.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -156,14 +173,14 @@ You are Codex on a fresh Ubuntu 24.04 server for AI Kids Music Studio.
 
 Goal:
 - Configure and verify the existing Next.js + FastAPI app from this repository.
-- Use the mock server only.
-- Do not wire real GPU yet.
+- Use the SSH/server-owned generation path.
+- Keep mock generation only as a local fallback.
 - Do not rename technical stage_id values.
 
 Stack:
 - Backend: app/api, FastAPI, port 8000
 - Frontend: app/web, Next.js, port 3010
-- Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, mock pipeline, artifact inventory, job history, approval history, next-action.
+- Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Next product modules: Publish Package v2, then Manual Performance Ledger.
 
 Do:
@@ -171,7 +188,8 @@ Do:
 2. Verify Ubuntu dependencies, Python venv, Node.js and npm.
 3. Run backend tests: cd app/api && python3 -m pytest -q
 4. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-5. Start backend on 0.0.0.0:8000 and frontend on 0.0.0.0:3010.
-6. If asked to make services, create systemd units only after the app works manually.
-7. Report exact commands, ports, and any blockers.
+5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>.
+6. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
+7. If asked to make services, create systemd units only after the app works manually.
+8. Report exact commands, ports, and any blockers.
 ```

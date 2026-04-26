@@ -50,6 +50,21 @@ pip install --upgrade pip
 pip install -r requirements.txt -r requirements-dev.txt
 python3 -m pytest -q
 
+if [ ! -f .env.ops ]; then
+  echo "==> Creating backend ops token"
+  umask 077
+  if command -v openssl >/dev/null 2>&1; then
+    printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env.ops
+  else
+    python3 - <<'PY' > .env.ops
+import secrets
+print(f"export STUDIO_ADMIN_TOKEN={secrets.token_hex(32)}")
+PY
+  fi
+else
+  echo "==> Backend ops token already exists"
+fi
+
 echo "==> Frontend setup"
 cd "$APP_DIR/app/web"
 npm install
@@ -62,6 +77,7 @@ cat <<EOF
 Run backend:
   cd $APP_DIR/app/api
   source .venv/bin/activate
+  source .env.ops
   python3 -m uvicorn studio_api.main:app --host 0.0.0.0 --port 8000
 
 Run frontend in a second terminal:
