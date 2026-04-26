@@ -15,8 +15,10 @@ import math
 import os
 import pathlib
 import shlex
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -772,6 +774,90 @@ def make_full_episode_render_plan(manifest: dict[str, Any], full_episode: dict[s
     return render_plan, "\n".join(commands) + "\n"
 
 
+def ffmpeg_command() -> str:
+    command = os.getenv("AIKIDDO_FFMPEG_BIN", "ffmpeg")
+    if pathlib.Path(command).is_absolute():
+        if pathlib.Path(command).exists():
+            return command
+    elif shutil.which(command):
+        return command
+    raise WorkerConfigurationError("FFmpeg is required for render.full_episode. Install ffmpeg or set AIKIDDO_FFMPEG_BIN.")
+
+
+def render_full_episode_video_assets(job_dir: pathlib.Path, render_plan: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], list[str]]:
+    ffmpeg = ffmpeg_command()
+    clips = render_plan.get("clips", [])
+    if not isinstance(clips, list) or not clips:
+        raise WorkerConfigurationError("render.full_episode requires at least one clip in render_plan.json.")
+
+    descriptors: list[tuple[str, str, str, str]] = []
+    logs: list[str] = []
+    scene_paths: list[pathlib.Path] = []
+    video_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
+    for index, clip in enumerate(clips, start=1):
+        if not isinstance(clip, dict):
+            raise WorkerConfigurationError("render.full_episode clips must be JSON objects.")
+        source_path = pathlib.Path(str(clip.get("source_image_path") or ""))
+        if not source_path.exists():
+            raise WorkerConfigurationError(f"Source keyframe image does not exist: {source_path}")
+        output_rel = pathlib.Path(str(clip.get("output_path") or f"renders/{render_plan['episode_slug']}/scenes/video_scene_{index:02d}.mp4"))
+        output_path = job_dir / output_rel
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        duration_seconds = max(1, int(clip.get("duration_seconds") or 4))
+        command = [
+            ffmpeg,
+            "-y",
+            "-loop",
+            "1",
+            "-t",
+            str(duration_seconds),
+            "-i",
+            str(source_path),
+            "-vf",
+            video_filter,
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_rel),
+        ]
+        try:
+            subprocess.run(command, cwd=job_dir, text=True, capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise WorkerConfigurationError(f"FFmpeg scene render failed: {(exc.stderr or exc.stdout or str(exc))[:500]}") from exc
+        scene_paths.append(output_path)
+        descriptors.append((f"scene_video_{index:02d}_mp4", "scene_video", str(output_rel), "video/mp4"))
+
+    concat_rel = pathlib.Path(str(render_plan.get("concat_list_path") or f"renders/{render_plan['episode_slug']}/concat-list.txt"))
+    concat_path = job_dir / concat_rel
+    concat_path.parent.mkdir(parents=True, exist_ok=True)
+    concat_path.write_text("".join(f"file '{scene_path}'\n" for scene_path in scene_paths), encoding="utf-8")
+
+    output_rel = pathlib.Path(str(render_plan.get("output_path") or f"renders/{render_plan['episode_slug']}/full-episode.mp4"))
+    output_path = job_dir / output_rel
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_rel),
+        "-c",
+        "copy",
+        str(output_rel),
+    ]
+    try:
+        subprocess.run(command, cwd=job_dir, text=True, capture_output=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise WorkerConfigurationError(f"FFmpeg full episode assembly failed: {(exc.stderr or exc.stdout or str(exc))[:500]}") from exc
+    descriptors.append(("full_episode_mp4", "full_episode_video", str(output_rel), "video/mp4"))
+    logs.append(f"Rendered full episode MP4: {output_rel}")
+    return descriptors, logs
+
+
 def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
@@ -1274,13 +1360,20 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
     for filename, payload in payloads.items():
         path = job_dir / filename
         if isinstance(payload, bytes):
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(payload)
         elif filename.endswith(".json"):
+            path.parent.mkdir(parents=True, exist_ok=True)
             write_json(path, payload)
         elif filename.endswith(".wav"):
             build_audio_preview(job_dir, brief["topic"], filename=filename)
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(payload), encoding="utf-8")
+    render_logs: list[str] = []
+    if stage == "render.full_episode" and worker_mode() != "deterministic" and isinstance(payloads.get("render_plan.json"), dict):
+        rendered_descriptors, render_logs = render_full_episode_video_assets(job_dir, payloads["render_plan.json"])
+        descriptors = [*descriptors, *rendered_descriptors]
     artifacts = [
         artifact_for(job_dir, manifest=manifest, artifact_id=artifact_id, artifact_type=artifact_type, filename=filename, mime_type=mime_type)
         for artifact_id, artifact_type, filename, mime_type in descriptors
@@ -1302,6 +1395,7 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
         ],
     }
     logs = [f"server worker wrote {filename}" for _, _, filename, _ in descriptors]
+    logs.extend(render_logs)
     return artifacts, preview, logs
 
 
