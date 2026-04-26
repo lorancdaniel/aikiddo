@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -1861,11 +1862,19 @@ def test_aikiddo_worker_prepares_publish_video_asset_artifacts(tmp_path: Path, m
     assert "publish_assets_manifest_json" in artifact_ids
     assert "publish_full_episode_mp4" in artifact_ids
     assert "publish_reel_01_mp4" in artifact_ids
+    assert "publish_package_zip" in artifact_ids
     assert (job_dir / "publish" / "brush-song" / "videos" / "full-episode.mp4").read_bytes() == b"full episode mp4"
     assert (job_dir / "publish" / "brush-song" / "reels" / "reel-01.mp4").read_bytes() == b"reel mp4"
     asset_manifest = json.loads((job_dir / "publish_assets_manifest.json").read_text(encoding="utf-8"))
     assert asset_manifest["assets"][0]["artifact_id"] == "publish_full_episode_mp4"
     assert asset_manifest["assets"][1]["artifact_id"] == "publish_reel_01_mp4"
+    with zipfile.ZipFile(job_dir / "publish" / "brush-song.zip") as package_zip:
+        assert sorted(package_zip.namelist()) == [
+            "publish/brush-song/reels/reel-01.mp4",
+            "publish/brush-song/videos/full-episode.mp4",
+            "publish_assets_manifest.json",
+            "publish_package.json",
+        ]
     assert preview["song_plan"]["artifact_count"] == len(artifacts)
     assert any("Prepared publish package assets" in line for line in logs)
 

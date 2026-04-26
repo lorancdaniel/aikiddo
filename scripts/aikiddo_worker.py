@@ -23,6 +23,7 @@ import sys
 import urllib.error
 import urllib.request
 import wave
+import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1015,6 +1016,18 @@ def prepare_publish_video_assets(job_dir: pathlib.Path, manifest: dict[str, Any]
     }
     write_json(job_dir / "publish_assets_manifest.json", assets_manifest)
     descriptors.append(("publish_assets_manifest_json", "publish_assets_manifest", "publish_assets_manifest.json", "application/json"))
+
+    archive_path = job_dir / package_path.with_suffix(".zip")
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for manifest_filename in ("publish_package.json", "publish_assets_manifest.json"):
+            manifest_path = job_dir / manifest_filename
+            if manifest_path.exists():
+                archive.write(manifest_path, manifest_filename)
+        package_root = job_dir / package_path
+        for file_path in sorted(path for path in package_root.rglob("*") if path.is_file()):
+            archive.write(file_path, file_path.relative_to(job_dir))
+    descriptors.append(("publish_package_zip", "publish_archive", str(package_path.with_suffix(".zip")), "application/zip"))
     return descriptors, [f"Prepared publish package assets: {len(assets)}"]
 
 
