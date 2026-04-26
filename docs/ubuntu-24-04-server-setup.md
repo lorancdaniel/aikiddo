@@ -9,7 +9,7 @@ Target server seen from the Mac:
 - SSH port: `22`
 - App repo: `https://github.com/lorancdaniel/aikiddo.git`
 
-The app now runs server-owned SSH generation. The old mock path is still present only as a local fallback; production-style operation should use the SSH server profile and server-side artifacts.
+The app now runs server-owned SSH generation by default. Without an SSH server profile, generation fails closed instead of creating local fallback artifacts. The old mock path is only available for explicit local development with `STUDIO_ALLOW_LOCAL_MOCK=1`; do not enable it on the Ubuntu production server.
 
 SSH generation now uses the versioned, stage-aware worker script at `scripts/aikiddo_worker.py`. The FastAPI adapter sends that script and `job_manifest.json` to the server job directory, including upstream pipeline context for previous stages. The server then writes `output_manifest.json`, `worker.log`, and all artifacts under `<remote_root>/jobs/<job_id>/`.
 
@@ -132,6 +132,8 @@ The token is required for:
 
 If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
+Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default production behavior requires a saved SSH profile before any generation job can start. This prevents accidental local/mock artifacts from being treated as server-owned generation output.
+
 Do not use the old `/api/projects/{project_id}/remote-pilot` path for production work. It is retired and returns `410 Gone`; the app should create generation work through `POST /api/projects/{project_id}/jobs/{stage}` and read progress through job detail, events, logs, and artifacts.
 
 The current server worker is:
@@ -185,7 +187,7 @@ You are Codex on a fresh Ubuntu 24.04 server for AI Kids Music Studio.
 Goal:
 - Configure and verify the existing Next.js + FastAPI app from this repository.
 - Use the SSH/server-owned generation path.
-- Keep mock generation only as a local fallback.
+- Keep mock generation disabled on Ubuntu. It is only available for local development when `STUDIO_ALLOW_LOCAL_MOCK=1` is set deliberately.
 - Do not revive the retired /api/projects/{project_id}/remote-pilot flow.
 - Do not rename technical stage_id values.
 
@@ -201,7 +203,7 @@ Do:
 2. Verify Ubuntu dependencies, Python venv, Node.js and npm.
 3. Run backend tests: cd app/api && python3 -m pytest -q
 4. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>.
+5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>; do not add STUDIO_ALLOW_LOCAL_MOCK.
 6. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
 7. If asked to make services, create systemd units only after the app works manually.
 8. Report exact commands, ports, and any blockers.
