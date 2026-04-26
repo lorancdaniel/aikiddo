@@ -1,6 +1,7 @@
 import hashlib
 import json
 from json import JSONDecodeError
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -14,10 +15,19 @@ from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun
 
 class SshGenerationServer:
     adapter = "ssh"
+    worker_env_keys = ("OPENAI_API_KEY", "AIKIDDO_OPENAI_TEXT_MODEL", "AIKIDDO_OPENAI_TIMEOUT_SEC", "AIKIDDO_WORKER_MODE")
 
     def _worker_script_source(self) -> str:
         repo_root = Path(__file__).resolve().parents[3]
         return (repo_root / "scripts" / "aikiddo_worker.py").read_text(encoding="utf-8")
+
+    def _worker_env_exports(self) -> str:
+        exports = []
+        for key in self.worker_env_keys:
+            value = os.getenv(key)
+            if value:
+                exports.append(f"export {key}={shlex.quote(value)}")
+        return "\n".join(exports)
 
     def _ssh_base_command(self, profile: ServerProfile) -> list[str]:
         command = ["ssh", "-o", "BatchMode=yes", "-p", str(profile.port)]
@@ -141,6 +151,7 @@ class SshGenerationServer:
         }
         manifest_json = json.dumps(job_manifest, ensure_ascii=False, indent=2)
         worker_source = self._worker_script_source()
+        worker_env_exports = self._worker_env_exports()
         remote_script = f"""set -euo pipefail
 job_dir={shlex.quote(remote_job_dir)}
 python3 - "$job_dir" <<'PY'
@@ -153,6 +164,7 @@ job_dir.mkdir(parents=True, exist_ok=True)
 (job_dir / "job_manifest.json").write_text({json.dumps(manifest_json)}, encoding="utf-8")
 (job_dir / "aikiddo_worker.py").write_text({json.dumps(worker_source)}, encoding="utf-8")
 PY
+{worker_env_exports}
 python3 "$job_dir/aikiddo_worker.py" "$job_dir"
 """
         script_result = subprocess.run(

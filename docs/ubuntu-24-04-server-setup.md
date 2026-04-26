@@ -121,7 +121,11 @@ Create the backend admin token used by SSH worker control endpoints:
 ```bash
 cd ~/aikiddo/app/api
 umask 077
-printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env.ops
+{
+  printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)"
+  printf '# export OPENAI_API_KEY=your_real_key_here\n'
+  printf 'export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5\n'
+} > .env.ops
 ```
 
 The token is required for:
@@ -132,7 +136,11 @@ The token is required for:
 
 If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
+For production `lyrics.generate`, uncomment `OPENAI_API_KEY` in `.env.ops` and put the real key there before starting the backend. The backend passes only the allowlisted provider variables (`OPENAI_API_KEY`, `AIKIDDO_OPENAI_TEXT_MODEL`, `AIKIDDO_OPENAI_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `OPENAI_API_KEY`, production lyrics generation fails closed and does not write a success manifest.
+
 Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default production behavior requires a saved SSH profile before any generation job can start. This prevents accidental local/mock artifacts from being treated as server-owned generation output.
+
+Do not set `AIKIDDO_WORKER_MODE=deterministic` on the Ubuntu server unless you are deliberately doing a local development smoke test. That mode writes deterministic scaffolding instead of real provider output.
 
 Do not use the old `/api/projects/{project_id}/remote-pilot` path for production work. It is retired and returns `410 Gone`; the app should create generation work through `POST /api/projects/{project_id}/jobs/{stage}` and read progress through job detail, events, logs, and artifacts.
 
@@ -196,14 +204,15 @@ Stack:
 - Frontend: app/web, Next.js, port 3010
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
-- Next product modules: replace the lightweight worker internals with real lyrics/audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
+- Current provider path: lyrics.generate uses OpenAI Responses API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
+- Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
 1. Inspect the repo and current git status.
 2. Verify Ubuntu dependencies, Python venv, Node.js and npm.
 3. Run backend tests: cd app/api && python3 -m pytest -q
 4. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>; do not add STUDIO_ALLOW_LOCAL_MOCK.
+5. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
 6. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
 7. If asked to make services, create systemd units only after the app works manually.
 8. Report exact commands, ports, and any blockers.

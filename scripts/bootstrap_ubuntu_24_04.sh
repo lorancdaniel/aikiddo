@@ -54,11 +54,17 @@ if [ ! -f .env.ops ]; then
   echo "==> Creating backend ops token"
   umask 077
   if command -v openssl >/dev/null 2>&1; then
-    printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env.ops
+    {
+      printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)"
+      printf '# export OPENAI_API_KEY=your_real_key_here\n'
+      printf 'export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5\n'
+    } > .env.ops
   else
     python3 - <<'PY' > .env.ops
 import secrets
 print(f"export STUDIO_ADMIN_TOKEN={secrets.token_hex(32)}")
+print("# export OPENAI_API_KEY=your_real_key_here")
+print("export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5")
 PY
   fi
 else

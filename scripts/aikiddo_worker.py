@@ -11,13 +11,24 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import pathlib
 import socket
 import struct
 import sys
+import urllib.error
+import urllib.request
 import wave
 from datetime import datetime, timezone
 from typing import Any
+
+
+class WorkerConfigurationError(RuntimeError):
+    pass
+
+
+def worker_mode() -> str:
+    return os.getenv("AIKIDDO_WORKER_MODE", "openai").strip().lower()
 
 
 def slugify(value: str) -> str:
@@ -95,11 +106,143 @@ def make_lyrics_payload(brief: dict[str, Any]) -> tuple[str, dict[str, Any], dic
     return lyrics, song_plan, safety_notes
 
 
-def stage_files(stage: str, brief: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], dict[str, Any]]:
+def response_output_text(response: dict[str, Any]) -> str:
+    if isinstance(response.get("output_text"), str):
+        return response["output_text"]
+    chunks: list[str] = []
+    for item in response.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") == "output_text" and isinstance(content.get("text"), str):
+                chunks.append(content["text"])
+    return "\n".join(chunks).strip()
+
+
+def call_openai_json(*, instructions: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise WorkerConfigurationError("OPENAI_API_KEY is required for production text generation.")
+    model = os.getenv("AIKIDDO_OPENAI_TEXT_MODEL", "gpt-5").strip() or "gpt-5"
+    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+    request_payload = {
+        "model": model,
+        "instructions": instructions,
+        "input": prompt,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "aikiddo_stage_payload",
+                "strict": True,
+                "schema": schema,
+            }
+        },
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise WorkerConfigurationError(f"OpenAI text generation failed with HTTP {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise WorkerConfigurationError(f"OpenAI text generation failed: {exc.reason}") from exc
+
+    text = response_output_text(payload)
+    if not text:
+        raise WorkerConfigurationError("OpenAI text generation returned no text output.")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise WorkerConfigurationError("OpenAI text generation returned invalid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise WorkerConfigurationError("OpenAI text generation returned a non-object JSON payload.")
+    return parsed
+
+
+def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["lyrics", "song_plan", "safety_notes"],
+        "properties": {
+            "lyrics": {"type": "string"},
+            "song_plan": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "topic", "age_range", "duration_target_sec", "sections", "storage_policy"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "topic": {"type": "string"},
+                    "age_range": {"type": "string"},
+                    "duration_target_sec": {"type": "integer"},
+                    "sections": {"type": "array", "items": {"type": "string"}},
+                    "storage_policy": {"type": "string"},
+                },
+            },
+            "safety_notes": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["status", "checks", "host"],
+                "properties": {
+                    "status": {"type": "string"},
+                    "checks": {"type": "array", "items": {"type": "string"}},
+                    "host": {"type": "string"},
+                },
+            },
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "pipeline_context": manifest.get("pipeline_context", []),
+            "requirements": [
+                "Write age-appropriate lyrics for children in the requested language implied by the brief.",
+                "Keep the content safe for preschool audiences and suitable for later human review.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side lyric generator for Aikiddo. Produce safe, original, reviewable kids song materials.",
+        prompt=prompt,
+        schema=schema,
+    )
+    lyrics = str(payload["lyrics"]).strip() + "\n"
+    song_plan = dict(payload["song_plan"])
+    song_plan["storage_policy"] = "server"
+    safety_notes = dict(payload["safety_notes"])
+    safety_notes["host"] = socket.gethostname()
+    return lyrics, song_plan, safety_notes
+
+
+def ensure_stage_can_run(stage: str) -> None:
+    if worker_mode() == "deterministic":
+        return
+    if stage != "lyrics.generate":
+        raise WorkerConfigurationError(
+            f"Production worker for {stage} is not configured yet. "
+            "Set AIKIDDO_WORKER_MODE=deterministic only for local development."
+        )
+
+
+def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> tuple[list[tuple[str, str, str, str]], dict[str, Any]]:
     topic = brief["topic"]
     title = brief["title"]
     age_range = brief["age_range"]
     episode_slug = slugify(title) or "episode"
+    ensure_stage_can_run(stage)
 
     if stage == "brief.generate":
         payload = {
@@ -117,7 +260,10 @@ def stage_files(stage: str, brief: dict[str, Any]) -> tuple[list[tuple[str, str,
         }
 
     if stage == "lyrics.generate":
-        lyrics, song_plan, safety_notes = make_lyrics_payload(brief)
+        if worker_mode() == "deterministic":
+            lyrics, song_plan, safety_notes = make_lyrics_payload(brief)
+        else:
+            lyrics, song_plan, safety_notes = make_openai_lyrics_payload(manifest, brief)
         return [
             ("lyrics_txt", "lyrics", "lyrics.txt", "text/plain"),
             ("song_plan_json", "song_plan", "song_plan.json", "application/json"),
@@ -275,7 +421,7 @@ def write_stage_outputs(job_dir: pathlib.Path, manifest: dict[str, Any], stage: 
                 "upstream_stages": pipeline_context,
             },
         )
-    descriptors, payloads = stage_files(stage, brief)
+    descriptors, payloads = stage_files(stage, brief, manifest)
     if pipeline_context:
         descriptors = [
             ("input_context_json", "input_context", "input_context.json", "application/json"),
@@ -361,7 +507,11 @@ def main() -> int:
         return 2
     job_dir = pathlib.Path(sys.argv[1])
     job_dir.mkdir(parents=True, exist_ok=True)
-    output = run(job_dir)
+    try:
+        output = run(job_dir)
+    except WorkerConfigurationError as exc:
+        print(f"worker_configuration_error={exc}", file=sys.stderr)
+        return 1
     print(json.dumps(output, ensure_ascii=False))
     return 0
 

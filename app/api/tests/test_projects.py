@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -160,6 +161,17 @@ def job_id_from_output_manifest_command(command: list[str]) -> str:
     return command[-1].split("/jobs/", 1)[1].split("/", 1)[0]
 
 
+def deterministic_worker_env() -> dict[str, str]:
+    return {**os.environ, "AIKIDDO_WORKER_MODE": "deterministic"}
+
+
+def production_worker_env_without_openai_key() -> dict[str, str]:
+    env = {**os.environ}
+    env.pop("AIKIDDO_WORKER_MODE", None)
+    env.pop("OPENAI_API_KEY", None)
+    return env
+
+
 def extract_job_manifest_from_ssh_script(script: str) -> dict:
     legacy_marker = "<<'JSON'\n"
     if legacy_marker in script:
@@ -200,6 +212,7 @@ def test_aikiddo_worker_writes_server_output_contract(tmp_path: Path) -> None:
         [sys.executable, str(worker_path), str(job_dir)],
         text=True,
         capture_output=True,
+        env=deterministic_worker_env(),
         timeout=10,
         check=False,
     )
@@ -223,6 +236,46 @@ def test_aikiddo_worker_writes_server_output_contract(tmp_path: Path) -> None:
     assert (job_dir / "safety_notes.json").exists()
     assert (job_dir / "audio_preview.wav").exists()
     assert "runner=aikiddo_worker.py" in (job_dir / "worker.log").read_text(encoding="utf-8")
+
+
+def test_aikiddo_worker_requires_openai_key_for_production_lyrics(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job_requires_provider"
+    job_dir.mkdir()
+    manifest = {
+        "schema_version": "job.v1",
+        "job_id": "remote_requires_provider",
+        "project_id": "project_contract",
+        "stage": "lyrics.generate",
+        "job_type": "kids_song_pilot",
+        "adapter": "ssh",
+        "brief": {
+            "id": "brief_contract",
+            "title": "Colors Song",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+            "forbidden_motifs": [],
+            "created_at": "2026-04-26T00:00:00+00:00",
+        },
+        "created_at": "2026-04-26T00:00:00+00:00",
+    }
+    (job_dir / "job_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
+    result = subprocess.run(
+        [sys.executable, str(worker_path), str(job_dir)],
+        text=True,
+        capture_output=True,
+        env=production_worker_env_without_openai_key(),
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert result.stderr.strip() == "worker_configuration_error=OPENAI_API_KEY is required for production text generation."
+    assert not (job_dir / "output_manifest.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -271,6 +324,7 @@ def test_aikiddo_worker_is_stage_aware(tmp_path: Path, stage: str, expected_arti
         [sys.executable, str(worker_path), str(job_dir)],
         text=True,
         capture_output=True,
+        env=deterministic_worker_env(),
         timeout=10,
         check=False,
     )
@@ -326,6 +380,7 @@ def test_aikiddo_worker_persists_input_context_artifact(tmp_path: Path) -> None:
         [sys.executable, str(worker_path), str(job_dir)],
         text=True,
         capture_output=True,
+        env=deterministic_worker_env(),
         timeout=10,
         check=False,
     )
@@ -382,6 +437,7 @@ def test_remote_pilot_endpoint_is_retired(tmp_path: Path) -> None:
 
 def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypatch) -> None:
     client = make_client(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-worker")
     project = client.post(
         "/api/projects",
         json={
@@ -441,6 +497,7 @@ def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypa
         "audio_preview_wav",
     ]
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
+    assert any("export OPENAI_API_KEY=sk-test-worker" in call["input"] for call in calls if call["input"])
     assert not (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
