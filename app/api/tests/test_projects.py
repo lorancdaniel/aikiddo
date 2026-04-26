@@ -3495,6 +3495,7 @@ def test_video_job_artifact_is_served_inline_for_web_playback(tmp_path: Path, mo
     assert response.headers["accept-ranges"] == "bytes"
     assert response.headers["content-disposition"] == 'inline; filename="full-episode.mp4"'
     assert response.headers["x-artifact-sha256"] == artifact["sha256"]
+    assert response.headers["x-artifact-cache"] == "miss"
 
 
 def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path, monkeypatch) -> None:
@@ -3618,6 +3619,7 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
     assert suffix_response.status_code == 206
     assert suffix_response.content == b"cdef"
     assert suffix_response.headers["content-range"] == "bytes 12-15/16"
+    assert suffix_response.headers["x-artifact-cache"] == "hit"
     assert invalid_response.status_code == 416
     assert invalid_response.headers["content-range"] == "bytes */16"
     assert len(ssh_fetches) == 1
@@ -3639,6 +3641,124 @@ def test_video_job_artifact_supports_http_range_for_web_playback(tmp_path: Path,
     assert rebuilt_response.content == b"0123"
     assert len(ssh_fetches) == 2
     assert cache_path.read_bytes() == mp4_content
+
+
+def test_video_job_artifact_over_cache_limit_bypasses_cache_and_blocks_range(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child remembers morning brushing",
+            "characters": [],
+        },
+    ).json()
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    job_id = "remote_video_cache_limit"
+    now = "2026-04-26T12:00:00+00:00"
+    mp4_content = b"0123456789abcdef"
+    artifact = {
+        "artifact_id": "publish_full_episode_mp4",
+        "type": "publish_video",
+        "filename": "publish/brush-song/videos/full-episode.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": len(mp4_content),
+        "sha256": hashlib.sha256(mp4_content).hexdigest(),
+        "storage_key": f"projects/{project['id']}/jobs/{job_id}/publish/brush-song/videos/full-episode.mp4",
+        "public": False,
+    }
+    project_dir = tmp_path / "projects" / project["id"]
+    jobs_dir = project_dir / "jobs"
+    runs_dir = project_dir / "remote-runs"
+    jobs_dir.mkdir(parents=True)
+    runs_dir.mkdir(parents=True)
+    (jobs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "message": "Publish package ready.",
+                "attempt_id": "attempt_video_cache_limit",
+                "failure_reason": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runs_dir / f"{job_id}.json").write_text(
+        json.dumps(
+            {
+                "id": job_id,
+                "project_id": project["id"],
+                "stage": "publish.prepare_package",
+                "status": "completed",
+                "adapter": "ssh",
+                "remote_job_dir": f"/home/daniel/aikiddo-worker/jobs/{job_id}",
+                "job_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/job_manifest.json",
+                "output_manifest_path": f"/home/daniel/aikiddo-worker/jobs/{job_id}/output_manifest.json",
+                "output_files": [artifact["storage_key"]],
+                "artifacts": [artifact],
+                "preview": None,
+                "message": "Publish package ready.",
+                "logs": ["ready"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AIKIDDO_MEDIA_CACHE_MAX_ARTIFACT_BYTES", "8")
+
+    class Completed:
+        returncode = 0
+        stdout = mp4_content
+        stderr = b""
+
+    def fake_run(command, *, capture_output=None, timeout=None, check=None):
+        assert command[-1].startswith("cat ")
+        return Completed()
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    full_response = client.get(f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4")
+    range_response = client.get(
+        f"/api/projects/{project['id']}/jobs/{job_id}/artifacts/publish_full_episode_mp4",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert full_response.status_code == 200
+    assert full_response.content == mp4_content
+    assert full_response.headers["x-artifact-cache"] == "bypass"
+    assert full_response.headers["accept-ranges"] == "none"
+    assert range_response.status_code == 409
+    assert range_response.json()["detail"] == {
+        "error": "artifact_range_unavailable",
+        "reason": "artifact_exceeds_media_cache_limit",
+        "playback": "download_only",
+    }
+    assert range_response.headers["x-artifact-cache"] == "bypass"
+    assert "artifact_size_over_limit:8" in range_response.headers["x-artifact-cache-policy"]
+    cache_path = tmp_path / "projects" / ".studio" / "media-cache" / "blobs" / artifact["sha256"][:2] / f"{artifact['sha256']}.bin"
+    assert not cache_path.exists()
 
 
 def test_create_project_persists_project_and_brief(tmp_path: Path) -> None:

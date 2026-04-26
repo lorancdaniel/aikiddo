@@ -1,8 +1,11 @@
 from pathlib import Path
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
 import secrets
+import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
@@ -64,12 +67,62 @@ from .ssh_generation import SshGenerationServer
 from .storage import ProjectStorage
 
 
+MEDIA_CACHE_LOCKS: dict[str, threading.Lock] = {}
+MEDIA_CACHE_LOCKS_GUARD = threading.Lock()
+DEFAULT_MEDIA_CACHE_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
+
+
 def is_media_artifact(artifact: GenerationArtifact) -> bool:
     return artifact.mime_type.startswith(("video/", "audio/"))
 
 
+def get_media_cache_lock(sha256: str) -> threading.Lock:
+    with MEDIA_CACHE_LOCKS_GUARD:
+        lock = MEDIA_CACHE_LOCKS.get(sha256)
+        if lock is None:
+            lock = threading.Lock()
+            MEDIA_CACHE_LOCKS[sha256] = lock
+        return lock
+
+
+def media_cache_max_artifact_bytes() -> int:
+    value = os.environ.get("AIKIDDO_MEDIA_CACHE_MAX_ARTIFACT_BYTES")
+    if value is None:
+        return DEFAULT_MEDIA_CACHE_MAX_ARTIFACT_BYTES
+    try:
+        parsed = int(value)
+    except ValueError:
+        return DEFAULT_MEDIA_CACHE_MAX_ARTIFACT_BYTES
+    return max(parsed, 0)
+
+
+def media_cache_policy_for(artifact: GenerationArtifact) -> tuple[bool, str]:
+    max_artifact_bytes = media_cache_max_artifact_bytes()
+    if max_artifact_bytes == 0:
+        return False, "disabled"
+    if artifact.size_bytes > max_artifact_bytes:
+        return False, f"artifact_size_over_limit:{max_artifact_bytes}"
+    return True, f"max_artifact_bytes:{max_artifact_bytes}"
+
+
 def media_cache_path(storage: ProjectStorage, artifact: GenerationArtifact) -> Path:
     return storage.studio_dir / "media-cache" / "blobs" / artifact.sha256[:2] / f"{artifact.sha256}.bin"
+
+
+def media_cache_lock_path(storage: ProjectStorage, sha256: str) -> Path:
+    return storage.studio_dir / "media-cache" / "locks" / f"{sha256}.lock"
+
+
+@contextmanager
+def media_cache_file_lock(storage: ProjectStorage, sha256: str):
+    lock_path = media_cache_lock_path(storage, sha256)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def safe_cache_component(value: str) -> str:
@@ -133,6 +186,23 @@ def write_media_cache_index(storage: ProjectStorage, run: RemotePilotRun, artifa
 
 
 def ensure_media_cache_file(
+    *,
+    storage: ProjectStorage,
+    ssh_server: SshGenerationServer,
+    profile: ServerProfile,
+    run: RemotePilotRun,
+    artifact: GenerationArtifact,
+) -> tuple[Path, bool]:
+    cache_allowed, _ = media_cache_policy_for(artifact)
+    if not cache_allowed:
+        raise ValueError(artifact.artifact_id)
+    lock = get_media_cache_lock(artifact.sha256)
+    with lock:
+        with media_cache_file_lock(storage, artifact.sha256):
+            return ensure_media_cache_file_locked(storage=storage, ssh_server=ssh_server, profile=profile, run=run, artifact=artifact)
+
+
+def ensure_media_cache_file_locked(
     *,
     storage: ProjectStorage,
     ssh_server: SshGenerationServer,
@@ -946,11 +1016,30 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         if requested_artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found")
         if range_header is not None and is_media_artifact(requested_artifact):
+            cache_allowed, cache_policy = media_cache_policy_for(requested_artifact)
+            if not cache_allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "artifact_range_unavailable",
+                        "reason": "artifact_exceeds_media_cache_limit",
+                        "playback": "download_only",
+                    },
+                    headers={
+                        "Accept-Ranges": "none",
+                        "X-Artifact-Cache": "bypass",
+                        "X-Artifact-Cache-Policy": cache_policy,
+                    },
+                )
             requested_range = parse_http_byte_range(range_header, requested_artifact.size_bytes)
             if requested_range is None:
                 return Response(
                     status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                    headers={"Content-Range": f"bytes */{requested_artifact.size_bytes}", "Accept-Ranges": "bytes"},
+                    headers={
+                        "Content-Range": f"bytes */{requested_artifact.size_bytes}",
+                        "Accept-Ranges": "bytes",
+                        "X-Artifact-Cache-Policy": cache_policy,
+                    },
                 )
             start, end = requested_range
             content_length = end - start + 1
@@ -980,9 +1069,29 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
                     "Content-Length": str(content_length),
                     "Content-Disposition": f'inline; filename="{download_filename}"',
                     "X-Artifact-Cache": "hit" if cache_hit else "miss",
+                    "X-Artifact-Cache-Policy": cache_policy,
                 },
             )
         if is_media_artifact(requested_artifact):
+            cache_allowed, cache_policy = media_cache_policy_for(requested_artifact)
+            if not cache_allowed:
+                try:
+                    artifact, content = ssh_server.fetch_artifact(profile, run, artifact_id)
+                except FileNotFoundError:
+                    raise HTTPException(status_code=404, detail="Artifact not found") from None
+                except ValueError:
+                    raise HTTPException(status_code=502, detail="Artifact checksum mismatch") from None
+                return Response(
+                    content=content,
+                    media_type=artifact.mime_type,
+                    headers={
+                        "Accept-Ranges": "none",
+                        "Content-Disposition": f'inline; filename="{Path(artifact.filename).name}"',
+                        "X-Artifact-SHA256": artifact.sha256,
+                        "X-Artifact-Cache": "bypass",
+                        "X-Artifact-Cache-Policy": cache_policy,
+                    },
+                )
             try:
                 cache_path, cache_hit = ensure_media_cache_file(
                     storage=storage,
@@ -1004,6 +1113,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
                     "Content-Disposition": f'inline; filename="{Path(requested_artifact.filename).name}"',
                     "X-Artifact-SHA256": requested_artifact.sha256,
                     "X-Artifact-Cache": "hit" if cache_hit else "miss",
+                    "X-Artifact-Cache-Policy": cache_policy,
                 },
             )
         try:
