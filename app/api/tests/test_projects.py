@@ -616,6 +616,176 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
     assert "soft 2D keyframe of brush_friend_v1" in payloads["keyframe_prompts.txt"]
 
 
+def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    audio_job_dir = tmp_path / "audio_job"
+    audio_job_dir.mkdir()
+    (audio_job_dir / "audio_plan.json").write_text(
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready"}),
+        encoding="utf-8",
+    )
+    audio_output_path = audio_job_dir / "output_manifest.json"
+    audio_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(audio_job_dir),
+                "artifacts": [{"artifact_id": "audio_plan_json", "filename": "audio_plan.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    storyboard_job_dir = tmp_path / "storyboard_job"
+    storyboard_job_dir.mkdir()
+    (storyboard_job_dir / "storyboard.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "scenes": [
+                    {
+                        "id": "scene_01_opening",
+                        "duration_seconds": 12,
+                        "action": "Brush friend waves beside the sink.",
+                        "visual_prompt": "soft 2D bathroom classroom, brush_friend_v1 waving",
+                        "lyric_reference": "Brush, brush",
+                        "safety_note": "No unsafe bathroom climbing.",
+                    }
+                ],
+                "safety_checks": ["no unsafe imitation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    storyboard_output_path = storyboard_job_dir / "output_manifest.json"
+    storyboard_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(storyboard_job_dir),
+                "artifacts": [{"artifact_id": "storyboard_json", "filename": "storyboard.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keyframes_job_dir = tmp_path / "keyframes_job"
+    keyframes_job_dir.mkdir()
+    (keyframes_job_dir / "keyframes.json").write_text(
+        json.dumps(
+            {
+                "title": "Brush Song",
+                "topic": "tooth brushing",
+                "status": "ready_for_visual_review",
+                "frames": [
+                    {
+                        "id": "keyframe_01",
+                        "scene_id": "scene_01_opening",
+                        "timestamp_seconds": 0,
+                        "image_prompt": "soft 2D keyframe of brush_friend_v1 waving beside a safe sink",
+                        "composition": "medium-wide shot",
+                        "continuity_note": "same palette",
+                        "safety_note": "no climbing",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (keyframes_job_dir / "keyframe_prompts.txt").write_text(
+        "soft 2D keyframe of brush_friend_v1 waving beside a safe sink\n",
+        encoding="utf-8",
+    )
+    keyframes_output_path = keyframes_job_dir / "output_manifest.json"
+    keyframes_output_path.write_text(
+        json.dumps(
+            {
+                "remote_job_dir": str(keyframes_job_dir),
+                "artifacts": [
+                    {"artifact_id": "keyframes_json", "filename": "keyframes.json"},
+                    {"artifact_id": "keyframe_prompts_txt", "filename": "keyframe_prompts.txt"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "video scene planner" in instructions
+        assert "keyframe_01" in prompt
+        assert "audio_preview_ready" in prompt
+        assert "Do not claim that a video file has already been rendered." in prompt
+        assert schema["properties"]["clips"]["minItems"] == 3
+        return {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "render_policy": "draft",
+            "status": "draft",
+            "clips": [
+                {
+                    "id": "video_scene_01",
+                    "source_keyframe_id": "keyframe_01",
+                    "scene_id": "scene_01_opening",
+                    "duration_seconds": 4,
+                    "motion_prompt": "small friendly wave, no sudden motion",
+                    "camera_motion": "locked gentle push-in",
+                    "transition": "soft dissolve",
+                    "render_notes": "render from approved keyframe, keep sink simple",
+                    "safety_note": "no climbing or rapid flashes",
+                },
+                {
+                    "id": "video_scene_02",
+                    "source_keyframe_id": "keyframe_01",
+                    "scene_id": "scene_01_opening",
+                    "duration_seconds": 4,
+                    "motion_prompt": "slow brushing gesture loop",
+                    "camera_motion": "static medium shot",
+                    "transition": "straight cut",
+                    "render_notes": "keep character proportions stable",
+                    "safety_note": "gentle motion only",
+                },
+                {
+                    "id": "video_scene_03",
+                    "source_keyframe_id": "keyframe_01",
+                    "scene_id": "scene_01_opening",
+                    "duration_seconds": 4,
+                    "motion_prompt": "character smiles near the clean sink",
+                    "camera_motion": "no camera movement",
+                    "transition": "soft fade",
+                    "render_notes": "prepare for human review",
+                    "safety_note": "no product claims",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "video.scenes.generate",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+        },
+        {
+            "job_id": "remote_video_scenes_provider",
+            "project_id": "project_video_scenes_provider",
+            "stage": "video.scenes.generate",
+            "pipeline_context": [
+                {"stage": "audio.generate_or_import", "output_manifest_path": str(audio_output_path)},
+                {"stage": "storyboard.generate", "output_manifest_path": str(storyboard_output_path)},
+                {"stage": "keyframes.generate", "output_manifest_path": str(keyframes_output_path)},
+            ],
+        },
+    )
+
+    assert descriptors == [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")]
+    assert payloads["video_scenes.json"]["render_policy"] == "server-owned scene files"
+    assert payloads["video_scenes.json"]["status"] == "ready_for_scene_review"
+    assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_id"] == "keyframe_01"
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_artifact_id"),
     [

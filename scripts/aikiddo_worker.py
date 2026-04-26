@@ -501,6 +501,86 @@ def make_openai_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any
     return payload, "\n".join(prompt_lines) + "\n"
 
 
+def make_openai_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+    keyframes = read_upstream_artifact_json(manifest, stage="keyframes.generate", artifact_id="keyframes_json")
+    keyframe_prompts = read_upstream_artifact_text(manifest, stage="keyframes.generate", artifact_id="keyframe_prompts_txt")
+    storyboard = read_upstream_artifact_json(manifest, stage="storyboard.generate", artifact_id="storyboard_json")
+    audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "topic", "clips", "render_policy", "status"],
+        "properties": {
+            "title": {"type": "string"},
+            "topic": {"type": "string"},
+            "clips": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "id",
+                        "source_keyframe_id",
+                        "scene_id",
+                        "duration_seconds",
+                        "motion_prompt",
+                        "camera_motion",
+                        "transition",
+                        "render_notes",
+                        "safety_note",
+                    ],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "source_keyframe_id": {"type": "string"},
+                        "scene_id": {"type": "string"},
+                        "duration_seconds": {"type": "integer"},
+                        "motion_prompt": {"type": "string"},
+                        "camera_motion": {"type": "string"},
+                        "transition": {"type": "string"},
+                        "render_notes": {"type": "string"},
+                        "safety_note": {"type": "string"},
+                    },
+                },
+            },
+            "render_policy": {"type": "string"},
+            "status": {"type": "string"},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "keyframes": keyframes,
+            "keyframe_prompts": keyframe_prompts,
+            "storyboard": storyboard,
+            "audio_plan": audio_plan,
+            "requirements": [
+                "Create server-renderable scene plans from approved keyframes.",
+                "Do not claim that a video file has already been rendered.",
+                "Keep camera motion gentle and suitable for preschool audiences.",
+                "Map every clip to a source keyframe and storyboard scene.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side video scene planner for Aikiddo kids music videos.",
+        prompt=prompt,
+        schema=schema,
+    )
+    payload["title"] = str(payload.get("title") or brief["title"])
+    payload["topic"] = str(payload.get("topic") or brief["topic"])
+    payload["render_policy"] = "server-owned scene files"
+    payload["status"] = "ready_for_scene_review"
+    return payload
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
@@ -510,6 +590,7 @@ def ensure_stage_can_run(stage: str) -> None:
         "audio.generate_or_import",
         "storyboard.generate",
         "keyframes.generate",
+        "video.scenes.generate",
     }:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
@@ -639,18 +720,21 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "video.scenes.generate":
-        clips = [
-            {"id": f"video_scene_{index:02d}", "source_keyframe_id": f"keyframe_{index:02d}", "duration_seconds": 8 + index}
-            for index in range(1, 5)
-        ]
-        return [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")], {
-            "video_scenes.json": {
+        if worker_mode() == "deterministic":
+            video_scenes = {
                 "title": title,
                 "topic": topic,
-                "clips": clips,
+                "clips": [
+                    {"id": f"video_scene_{index:02d}", "source_keyframe_id": f"keyframe_{index:02d}", "duration_seconds": 8 + index}
+                    for index in range(1, 5)
+                ],
                 "render_policy": "server-owned scene files",
                 "status": "ready_for_scene_review",
-            },
+            }
+        else:
+            video_scenes = make_openai_video_scenes_payload(manifest, brief)
+        return [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")], {
+            "video_scenes.json": video_scenes,
         }
 
     if stage == "render.full_episode":
