@@ -227,10 +227,57 @@ def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) 
     return lyrics, song_plan, safety_notes
 
 
+def make_openai_character_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["character_bible", "style_frame_prompt"],
+        "properties": {
+            "character_bible": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["characters", "visual_style", "continuity_rules", "approval_status"],
+                "properties": {
+                    "characters": {"type": "array", "items": {"type": "string"}},
+                    "visual_style": {"type": "string"},
+                    "continuity_rules": {"type": "array", "items": {"type": "string"}},
+                    "approval_status": {"type": "string"},
+                },
+            },
+            "style_frame_prompt": {"type": "string"},
+        },
+    }
+    prompt = json.dumps(
+        {
+            "job_id": manifest["job_id"],
+            "project_id": manifest["project_id"],
+            "stage": manifest["stage"],
+            "brief": brief,
+            "pipeline_context": manifest.get("pipeline_context", []),
+            "requirements": [
+                "Create a concise character bible for a preschool-safe AI music video.",
+                "Respect any existing character names from the brief; invent only stable placeholder names when missing.",
+                "Write one visual style frame prompt that can later feed an image generator.",
+                "Return only JSON matching the schema.",
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    payload = call_openai_json(
+        instructions="You are the server-side character and visual continuity planner for Aikiddo.",
+        prompt=prompt,
+        schema=schema,
+    )
+    character_bible = dict(payload["character_bible"])
+    character_bible["approval_status"] = "ready_for_human_review"
+    return character_bible, str(payload["style_frame_prompt"]).strip() + "\n"
+
+
 def ensure_stage_can_run(stage: str) -> None:
     if worker_mode() == "deterministic":
         return
-    if stage != "lyrics.generate":
+    if stage not in {"lyrics.generate", "characters.import_or_approve"}:
         raise WorkerConfigurationError(
             f"Production worker for {stage} is not configured yet. "
             "Set AIKIDDO_WORKER_MODE=deterministic only for local development."
@@ -277,17 +324,22 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         }
 
     if stage == "characters.import_or_approve":
-        return [
-            ("character_bible_json", "character_bible", "character_bible.json", "application/json"),
-            ("style_frame_prompt_txt", "style_frame_prompt", "style_frame_prompt.txt", "text/plain"),
-        ], {
-            "character_bible.json": {
+        if worker_mode() == "deterministic":
+            character_bible = {
                 "characters": brief.get("characters", []) or ["hero_friend_v1"],
                 "visual_style": "soft preschool-safe animation",
                 "continuity_rules": ["same proportions", "same palette", "clear facial expressions"],
                 "approval_status": "ready_for_human_review",
-            },
-            "style_frame_prompt.txt": f"friendly preschool character set for {topic}, consistent design, safe gestures\n",
+            }
+            style_frame_prompt = f"friendly preschool character set for {topic}, consistent design, safe gestures\n"
+        else:
+            character_bible, style_frame_prompt = make_openai_character_payload(manifest, brief)
+        return [
+            ("character_bible_json", "character_bible", "character_bible.json", "application/json"),
+            ("style_frame_prompt_txt", "style_frame_prompt", "style_frame_prompt.txt", "text/plain"),
+        ], {
+            "character_bible.json": character_bible,
+            "style_frame_prompt.txt": style_frame_prompt,
         }
 
     if stage == "audio.generate_or_import":

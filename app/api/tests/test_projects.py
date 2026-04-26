@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import subprocess
@@ -172,6 +173,15 @@ def production_worker_env_without_openai_key() -> dict[str, str]:
     return env
 
 
+def load_worker_module():
+    worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
+    spec = importlib.util.spec_from_file_location("aikiddo_worker_under_test", worker_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def extract_job_manifest_from_ssh_script(script: str) -> dict:
     legacy_marker = "<<'JSON'\n"
     if legacy_marker in script:
@@ -276,6 +286,47 @@ def test_aikiddo_worker_requires_openai_key_for_production_lyrics(tmp_path: Path
     assert result.returncode != 0
     assert result.stderr.strip() == "worker_configuration_error=OPENAI_API_KEY is required for production text generation."
     assert not (job_dir / "output_manifest.json").exists()
+
+
+def test_aikiddo_worker_uses_openai_provider_for_character_bible(monkeypatch) -> None:
+    worker = load_worker_module()
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+
+    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+        assert "character and visual continuity planner" in instructions
+        assert "characters.import_or_approve" in prompt
+        assert schema["required"] == ["character_bible", "style_frame_prompt"]
+        return {
+            "character_bible": {
+                "characters": ["brush_friend_v1"],
+                "visual_style": "clean 2D classroom animation with rounded shapes",
+                "continuity_rules": ["fixed color palette", "same proportions"],
+                "approval_status": "draft",
+            },
+            "style_frame_prompt": "brush_friend_v1 in a safe bright bathroom classroom scene",
+        }
+
+    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    descriptors, payloads = worker.stage_files(
+        "characters.import_or_approve",
+        {
+            "title": "Brush Song",
+            "topic": "tooth brushing",
+            "age_range": "3-5",
+            "characters": ["brush_friend_v1"],
+        },
+        {
+            "job_id": "remote_character_provider",
+            "project_id": "project_character_provider",
+            "stage": "characters.import_or_approve",
+            "pipeline_context": [{"stage": "lyrics.generate", "status": "completed"}],
+        },
+    )
+
+    assert ("character_bible_json", "character_bible", "character_bible.json", "application/json") in descriptors
+    assert payloads["character_bible.json"]["approval_status"] == "ready_for_human_review"
+    assert "brush_friend_v1" in payloads["style_frame_prompt.txt"]
 
 
 @pytest.mark.parametrize(
