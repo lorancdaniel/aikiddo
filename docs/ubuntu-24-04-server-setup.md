@@ -93,7 +93,7 @@ Install system dependencies:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl ca-certificates build-essential python3 python3-venv python3-pip
+sudo apt install -y git curl ca-certificates build-essential ffmpeg python3 python3-venv python3-pip
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
@@ -123,10 +123,16 @@ cd ~/aikiddo/app/api
 umask 077
 {
   printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)"
-  printf '# export OPENAI_API_KEY=your_real_key_here\n'
-  printf 'export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5\n'
-  printf 'export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts\n'
-  printf 'export AIKIDDO_OPENAI_TTS_VOICE=coral\n'
+  printf '# export AIKIDDO_TEXT_ENDPOINT=http://127.0.0.1:8001/v1/chat/completions\n'
+  printf '# export AIKIDDO_AUDIO_ENDPOINT=http://127.0.0.1:8002/v1/audio/speech\n'
+  printf '# export AIKIDDO_IMAGE_ENDPOINT=http://127.0.0.1:8188/v1/images/generations\n'
+  printf '# export AIKIDDO_VIDEO_ENDPOINT=http://127.0.0.1:8188/aikiddo/video\n'
+  printf 'export AIKIDDO_TEXT_MODEL=Qwen/Qwen3.6-27B\n'
+  printf 'export AIKIDDO_AUDIO_MODEL=YuE-s1-7B\n'
+  printf 'export AIKIDDO_AUDIO_VOICE=local-child-safe-guide\n'
+  printf 'export AIKIDDO_IMAGE_MODEL=FLUX.1-dev\n'
+  printf 'export AIKIDDO_IMAGE_SIZE=1536x1024\n'
+  printf 'export AIKIDDO_VIDEO_MODEL=Wan2.2-I2V-A14B\n'
 } > .env.ops
 ```
 
@@ -138,7 +144,14 @@ The token is required for:
 
 If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
-For production provider stages (`lyrics.generate`, `characters.import_or_approve`, `audio.generate_or_import`, `storyboard.generate`, `keyframes.generate`, `video.scenes.generate`, `render.full_episode`, `render.reels`, `quality.compliance_report`, and `publish.prepare_package`), uncomment `OPENAI_API_KEY` in `.env.ops` and put the real key there before starting the backend. The backend passes only the allowlisted provider variables (`OPENAI_API_KEY`, `AIKIDDO_OPENAI_TEXT_MODEL`, `AIKIDDO_OPENAI_IMAGE_MODEL`, `AIKIDDO_OPENAI_IMAGE_SIZE`, `AIKIDDO_OPENAI_TTS_MODEL`, `AIKIDDO_OPENAI_TTS_VOICE`, `AIKIDDO_OPENAI_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `OPENAI_API_KEY`, production provider generation fails closed and does not write a success manifest.
+For production generation stages, the server must use local model endpoints only. The backend passes only the allowlisted local variables (`AIKIDDO_TEXT_ENDPOINT`, `AIKIDDO_TEXT_API_KEY`, `AIKIDDO_TEXT_MODEL`, `AIKIDDO_AUDIO_ENDPOINT`, `AIKIDDO_AUDIO_API_KEY`, `AIKIDDO_AUDIO_MODEL`, `AIKIDDO_AUDIO_VOICE`, `AIKIDDO_IMAGE_ENDPOINT`, `AIKIDDO_IMAGE_API_KEY`, `AIKIDDO_IMAGE_MODEL`, `AIKIDDO_IMAGE_SIZE`, `AIKIDDO_VIDEO_ENDPOINT`, `AIKIDDO_VIDEO_MODEL`, `AIKIDDO_MODEL_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `AIKIDDO_TEXT_ENDPOINT`, production text/planning generation fails closed and does not write a success manifest.
+
+Recommended local model baseline for this machine:
+
+- text/planning: `Qwen/Qwen3.6-27B` behind an OpenAI-compatible `/v1/chat/completions` endpoint;
+- audio/music draft: `YuE-s1-7B` or the newest local lyrics-to-song model exposed through `AIKIDDO_AUDIO_ENDPOINT`;
+- image/keyframes: `FLUX.1-dev` or newer local image model exposed through `AIKIDDO_IMAGE_ENDPOINT`;
+- video: `Wan2.2-I2V-A14B` or newer local image-to-video model, preferably through ComfyUI or a thin local HTTP wrapper exposed through `AIKIDDO_VIDEO_ENDPOINT`.
 
 The bootstrap script installs `ffmpeg`. The current `render.full_episode` stage writes server-owned `full_episode.json`, `render_plan.json`, `ffmpeg_commands.txt`, per-scene MP4 files, and `renders/<episode_slug>/full-episode.mp4` from the approved keyframe PNG files. The `render.reels` stage then crops vertical 9:16 reel MP4 files from that full episode using the planned scene offsets.
 
@@ -148,7 +161,7 @@ Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default productio
 
 Do not set `AIKIDDO_WORKER_MODE=deterministic` on the Ubuntu server unless you are deliberately doing a local development smoke test. That mode writes deterministic scaffolding instead of real provider output.
 
-Before adding the real OpenAI key, you can verify the remote worker contract without provider costs:
+Before enabling local model endpoints, you can verify the remote worker contract without generation costs:
 
 ```bash
 python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke
@@ -218,9 +231,9 @@ Stack:
 - Frontend: app/web, Next.js, port 3010
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
-- Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
-- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; render.full_episode writes full_episode.json, render_plan.json, ffmpeg_commands.txt, scene MP4 files, and a full-episode MP4 through FFmpeg; render.reels writes reels.json plus vertical reel MP4 artifacts from the full episode; publish.prepare_package copies the episode/reel MP4s into a server-side publish package with publish_assets_manifest.json and a ZIP archive; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
-- Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
+- Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before enabling local model endpoints.
+- Current local provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.reels, quality.compliance_report, and publish.prepare_package use local text/planning JSON through `AIKIDDO_TEXT_ENDPOINT`; keyframes.generate writes PNG keyframes through `AIKIDDO_IMAGE_ENDPOINT`; render.full_episode writes full_episode.json, render_plan.json, ffmpeg_commands.txt, scene MP4 files, and a full-episode MP4 through FFmpeg; render.reels writes reels.json plus vertical reel MP4 artifacts from the full episode; publish.prepare_package copies the episode/reel MP4s into a server-side publish package with publish_assets_manifest.json and a ZIP archive; audio.generate_or_import uses `AIKIDDO_AUDIO_ENDPOINT`; deterministic worker mode is dev-only.
+- Next product modules: wire the local video endpoint into `video.scenes.generate`/scene rendering, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
 1. Inspect the repo and current git status.
@@ -228,7 +241,7 @@ Do:
 3. Run worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke
 4. Run backend tests: cd app/api && python3 -m pytest -q
 5. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-6. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, export AIKIDDO_OPENAI_IMAGE_MODEL=gpt-image-1, export AIKIDDO_OPENAI_IMAGE_SIZE=1536x1024, export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts, export AIKIDDO_OPENAI_TTS_VOICE=coral, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
+6. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_TEXT_ENDPOINT=http://127.0.0.1:8001/v1/chat/completions, export AIKIDDO_TEXT_MODEL=Qwen/Qwen3.6-27B, export AIKIDDO_AUDIO_ENDPOINT=<local-audio-endpoint>, export AIKIDDO_AUDIO_MODEL=YuE-s1-7B, export AIKIDDO_IMAGE_ENDPOINT=<local-image-endpoint>, export AIKIDDO_IMAGE_MODEL=FLUX.1-dev, export AIKIDDO_VIDEO_ENDPOINT=<local-video-endpoint>, and export AIKIDDO_VIDEO_MODEL=Wan2.2-I2V-A14B; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
 7. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
 8. If asked to make services, create systemd units only after the app works manually.
 9. Report exact commands, ports, and any blockers.

@@ -3,7 +3,7 @@
 
 This script is intended for a fresh Ubuntu/SSH host before enabling real
 provider calls. It validates that Python, filesystem writes, upstream manifest
-threading, and the worker contract are healthy without requiring OPENAI_API_KEY.
+threading, and the worker contract are healthy without requiring local model endpoints.
 """
 
 from __future__ import annotations

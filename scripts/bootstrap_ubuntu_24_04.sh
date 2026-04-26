@@ -57,19 +57,31 @@ if [ ! -f .env.ops ]; then
   if command -v openssl >/dev/null 2>&1; then
     {
       printf 'export STUDIO_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)"
-      printf '# export OPENAI_API_KEY=your_real_key_here\n'
-      printf 'export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5\n'
-      printf 'export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts\n'
-      printf 'export AIKIDDO_OPENAI_TTS_VOICE=coral\n'
+      printf '# export AIKIDDO_TEXT_ENDPOINT=http://127.0.0.1:8001/v1/chat/completions\n'
+      printf '# export AIKIDDO_AUDIO_ENDPOINT=http://127.0.0.1:8002/v1/audio/speech\n'
+      printf '# export AIKIDDO_IMAGE_ENDPOINT=http://127.0.0.1:8188/v1/images/generations\n'
+      printf '# export AIKIDDO_VIDEO_ENDPOINT=http://127.0.0.1:8188/aikiddo/video\n'
+      printf 'export AIKIDDO_TEXT_MODEL=Qwen/Qwen3.6-27B\n'
+      printf 'export AIKIDDO_AUDIO_MODEL=YuE-s1-7B\n'
+      printf 'export AIKIDDO_AUDIO_VOICE=local-child-safe-guide\n'
+      printf 'export AIKIDDO_IMAGE_MODEL=FLUX.1-dev\n'
+      printf 'export AIKIDDO_IMAGE_SIZE=1536x1024\n'
+      printf 'export AIKIDDO_VIDEO_MODEL=Wan2.2-I2V-A14B\n'
     } > .env.ops
   else
     python3 - <<'PY' > .env.ops
 import secrets
 print(f"export STUDIO_ADMIN_TOKEN={secrets.token_hex(32)}")
-print("# export OPENAI_API_KEY=your_real_key_here")
-print("export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5")
-print("export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts")
-print("export AIKIDDO_OPENAI_TTS_VOICE=coral")
+print("# export AIKIDDO_TEXT_ENDPOINT=http://127.0.0.1:8001/v1/chat/completions")
+print("# export AIKIDDO_AUDIO_ENDPOINT=http://127.0.0.1:8002/v1/audio/speech")
+print("# export AIKIDDO_IMAGE_ENDPOINT=http://127.0.0.1:8188/v1/images/generations")
+print("# export AIKIDDO_VIDEO_ENDPOINT=http://127.0.0.1:8188/aikiddo/video")
+print("export AIKIDDO_TEXT_MODEL=Qwen/Qwen3.6-27B")
+print("export AIKIDDO_AUDIO_MODEL=YuE-s1-7B")
+print("export AIKIDDO_AUDIO_VOICE=local-child-safe-guide")
+print("export AIKIDDO_IMAGE_MODEL=FLUX.1-dev")
+print("export AIKIDDO_IMAGE_SIZE=1536x1024")
+print("export AIKIDDO_VIDEO_MODEL=Wan2.2-I2V-A14B")
 PY
   fi
 else

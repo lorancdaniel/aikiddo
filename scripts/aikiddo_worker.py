@@ -33,7 +33,7 @@ class WorkerConfigurationError(RuntimeError):
 
 
 def worker_mode() -> str:
-    return os.getenv("AIKIDDO_WORKER_MODE", "openai").strip().lower()
+    return os.getenv("AIKIDDO_WORKER_MODE", "local_model").strip().lower()
 
 
 def slugify(value: str) -> str:
@@ -122,32 +122,43 @@ def response_output_text(response: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def call_openai_json(*, instructions: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise WorkerConfigurationError("OPENAI_API_KEY is required for production text generation.")
-    model = os.getenv("AIKIDDO_OPENAI_TEXT_MODEL", "gpt-5").strip() or "gpt-5"
-    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+def call_local_model_json(*, instructions: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    endpoint = os.getenv("AIKIDDO_TEXT_ENDPOINT", "").strip()
+    if not endpoint:
+        raise WorkerConfigurationError("AIKIDDO_TEXT_ENDPOINT is required for local text generation.")
+    model = os.getenv("AIKIDDO_TEXT_MODEL", "Qwen/Qwen3.6-27B").strip() or "Qwen/Qwen3.6-27B"
+    timeout = int(os.getenv("AIKIDDO_MODEL_TIMEOUT_SEC", "90"))
     request_payload = {
         "model": model,
-        "instructions": instructions,
-        "input": prompt,
-        "text": {
-            "format": {
-                "type": "json_schema",
+        "messages": [
+            {"role": "system", "content": instructions},
+            {
+                "role": "user",
+                "content": (
+                    "Return only valid JSON matching this JSON Schema:\n"
+                    + json.dumps(schema, ensure_ascii=False)
+                    + "\n\nInput:\n"
+                    + prompt
+                ),
+            },
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
                 "name": "aikiddo_stage_payload",
                 "strict": True,
                 "schema": schema,
-            }
+            },
         },
     }
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("AIKIDDO_TEXT_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        endpoint,
         data=json.dumps(request_payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -155,29 +166,35 @@ def call_openai_json(*, instructions: str, prompt: str, schema: dict[str, Any]) 
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise WorkerConfigurationError(f"OpenAI text generation failed with HTTP {exc.code}: {body[:500]}") from exc
+        raise WorkerConfigurationError(f"Local model text generation failed with HTTP {exc.code}: {body[:500]}") from exc
     except urllib.error.URLError as exc:
-        raise WorkerConfigurationError(f"OpenAI text generation failed: {exc.reason}") from exc
+        raise WorkerConfigurationError(f"Local model text generation failed: {exc.reason}") from exc
 
     text = response_output_text(payload)
     if not text:
-        raise WorkerConfigurationError("OpenAI text generation returned no text output.")
+        choices = payload.get("choices", [])
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message", {})
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                text = message["content"].strip()
+    if not text:
+        raise WorkerConfigurationError("Local model text generation returned no text output.")
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise WorkerConfigurationError("OpenAI text generation returned invalid JSON.") from exc
+        raise WorkerConfigurationError("Local model text generation returned invalid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise WorkerConfigurationError("OpenAI text generation returned a non-object JSON payload.")
+        raise WorkerConfigurationError("Local model text generation returned a non-object JSON payload.")
     return parsed
 
 
-def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise WorkerConfigurationError("OPENAI_API_KEY is required for production audio generation.")
-    model = os.getenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
-    voice = os.getenv("AIKIDDO_OPENAI_TTS_VOICE", "coral").strip() or "coral"
-    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+def call_local_model_speech(*, input_text: str, instructions: str) -> bytes:
+    endpoint = os.getenv("AIKIDDO_AUDIO_ENDPOINT", "").strip()
+    if not endpoint:
+        raise WorkerConfigurationError("AIKIDDO_AUDIO_ENDPOINT is required for local audio generation.")
+    model = os.getenv("AIKIDDO_AUDIO_MODEL", "YuE-s1-7B").strip() or "YuE-s1-7B"
+    voice = os.getenv("AIKIDDO_AUDIO_VOICE", "local-child-safe-guide").strip() or "local-child-safe-guide"
+    timeout = int(os.getenv("AIKIDDO_MODEL_TIMEOUT_SEC", "90"))
     request_payload = {
         "model": model,
         "voice": voice,
@@ -185,13 +202,14 @@ def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
         "instructions": instructions,
         "response_format": "mp3",
     }
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("AIKIDDO_AUDIO_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
-        "https://api.openai.com/v1/audio/speech",
+        endpoint,
         data=json.dumps(request_payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -199,30 +217,31 @@ def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
             return response.read()
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise WorkerConfigurationError(f"OpenAI speech generation failed with HTTP {exc.code}: {body[:500]}") from exc
+        raise WorkerConfigurationError(f"Local model speech generation failed with HTTP {exc.code}: {body[:500]}") from exc
     except urllib.error.URLError as exc:
-        raise WorkerConfigurationError(f"OpenAI speech generation failed: {exc.reason}") from exc
+        raise WorkerConfigurationError(f"Local model speech generation failed: {exc.reason}") from exc
 
 
-def call_openai_image(*, prompt: str) -> bytes:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise WorkerConfigurationError("OPENAI_API_KEY is required for production image generation.")
-    model = os.getenv("AIKIDDO_OPENAI_IMAGE_MODEL", "gpt-image-1").strip() or "gpt-image-1"
-    size = os.getenv("AIKIDDO_OPENAI_IMAGE_SIZE", "1536x1024").strip() or "1536x1024"
-    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+def call_local_model_image(*, prompt: str) -> bytes:
+    endpoint = os.getenv("AIKIDDO_IMAGE_ENDPOINT", "").strip()
+    if not endpoint:
+        raise WorkerConfigurationError("AIKIDDO_IMAGE_ENDPOINT is required for local image generation.")
+    model = os.getenv("AIKIDDO_IMAGE_MODEL", "FLUX.1-dev").strip() or "FLUX.1-dev"
+    size = os.getenv("AIKIDDO_IMAGE_SIZE", "1536x1024").strip() or "1536x1024"
+    timeout = int(os.getenv("AIKIDDO_MODEL_TIMEOUT_SEC", "90"))
     request_payload = {
         "model": model,
         "prompt": prompt,
         "size": size,
     }
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("AIKIDDO_IMAGE_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
-        "https://api.openai.com/v1/images/generations",
+        endpoint,
         data=json.dumps(request_payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -230,13 +249,13 @@ def call_openai_image(*, prompt: str) -> bytes:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise WorkerConfigurationError(f"OpenAI image generation failed with HTTP {exc.code}: {body[:500]}") from exc
+        raise WorkerConfigurationError(f"Local model image generation failed with HTTP {exc.code}: {body[:500]}") from exc
     except urllib.error.URLError as exc:
-        raise WorkerConfigurationError(f"OpenAI image generation failed: {exc.reason}") from exc
+        raise WorkerConfigurationError(f"Local model image generation failed: {exc.reason}") from exc
 
     data = payload.get("data", [])
     if not data or not isinstance(data[0], dict) or not isinstance(data[0].get("b64_json"), str):
-        raise WorkerConfigurationError("OpenAI image generation returned no b64_json image.")
+        raise WorkerConfigurationError("Local model image generation returned no b64_json image.")
     return base64.b64decode(data[0]["b64_json"])
 
 
@@ -309,7 +328,7 @@ def read_upstream_artifact_json(manifest: dict[str, Any], *, stage: str, artifac
     return payload
 
 
-def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+def make_local_model_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     schema = {
         "type": "object",
         "additionalProperties": False,
@@ -357,7 +376,7 @@ def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) 
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side lyric generator for Aikiddo. Produce safe, original, reviewable kids song materials.",
         prompt=prompt,
         schema=schema,
@@ -370,7 +389,7 @@ def make_openai_lyrics_payload(manifest: dict[str, Any], brief: dict[str, Any]) 
     return lyrics, song_plan, safety_notes
 
 
-def make_openai_character_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def make_local_model_character_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
     schema = {
         "type": "object",
         "additionalProperties": False,
@@ -407,7 +426,7 @@ def make_openai_character_payload(manifest: dict[str, Any], brief: dict[str, Any
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side character and visual continuity planner for Aikiddo.",
         prompt=prompt,
         schema=schema,
@@ -417,9 +436,9 @@ def make_openai_character_payload(manifest: dict[str, Any], brief: dict[str, Any
     return character_bible, str(payload["style_frame_prompt"]).strip() + "\n"
 
 
-def make_openai_audio_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
+def make_local_model_audio_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
     lyrics = read_upstream_artifact_text(manifest, stage="lyrics.generate", artifact_id="lyrics_txt")
-    audio_bytes = call_openai_speech(
+    audio_bytes = call_local_model_speech(
         input_text=lyrics,
         instructions=(
             "Perform as a warm AI-generated guide voice for a preschool educational song draft. "
@@ -430,16 +449,16 @@ def make_openai_audio_payload(manifest: dict[str, Any], brief: dict[str, Any]) -
         "title": brief["title"],
         "topic": brief["topic"],
         "source_stage": "lyrics.generate",
-        "model": os.getenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-        "voice": os.getenv("AIKIDDO_OPENAI_TTS_VOICE", "coral"),
+        "model": os.getenv("AIKIDDO_AUDIO_MODEL", "YuE-s1-7B"),
+        "voice": os.getenv("AIKIDDO_AUDIO_VOICE", "local-child-safe-guide"),
         "format": "mp3",
-        "disclosure": "AI-generated voice draft for operator review.",
+        "disclosure": "Locally generated audio draft for operator review.",
         "status": "audio_preview_ready",
     }
     return audio_plan, audio_bytes
 
 
-def make_openai_storyboard_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_storyboard_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     lyrics = read_upstream_artifact_text(manifest, stage="lyrics.generate", artifact_id="lyrics_txt")
     character_bible = read_upstream_artifact_json(manifest, stage="characters.import_or_approve", artifact_id="character_bible_json")
     audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
@@ -491,7 +510,7 @@ def make_openai_storyboard_payload(manifest: dict[str, Any], brief: dict[str, An
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side storyboard planner for Aikiddo kids music videos.",
         prompt=prompt,
         schema=schema,
@@ -502,7 +521,7 @@ def make_openai_storyboard_payload(manifest: dict[str, Any], brief: dict[str, An
     return payload
 
 
-def make_openai_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def make_local_model_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> tuple[dict[str, Any], str]:
     storyboard = read_upstream_artifact_json(manifest, stage="storyboard.generate", artifact_id="storyboard_json")
     character_bible = read_upstream_artifact_json(
         manifest,
@@ -570,7 +589,7 @@ def make_openai_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side keyframe prompt planner for Aikiddo kids music videos.",
         prompt=prompt,
         schema=schema,
@@ -582,7 +601,7 @@ def make_openai_keyframes_payload(manifest: dict[str, Any], brief: dict[str, Any
     return payload, "\n".join(prompt_lines) + "\n"
 
 
-def make_openai_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     keyframes = read_upstream_artifact_json(manifest, stage="keyframes.generate", artifact_id="keyframes_json")
     keyframe_prompts = read_upstream_artifact_text(manifest, stage="keyframes.generate", artifact_id="keyframe_prompts_txt")
     storyboard = read_upstream_artifact_json(manifest, stage="storyboard.generate", artifact_id="storyboard_json")
@@ -652,7 +671,7 @@ def make_openai_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, 
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side video scene planner for Aikiddo kids music videos.",
         prompt=prompt,
         schema=schema,
@@ -664,7 +683,7 @@ def make_openai_video_scenes_payload(manifest: dict[str, Any], brief: dict[str, 
     return payload
 
 
-def make_openai_full_episode_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_full_episode_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
     audio_plan = read_upstream_artifact_json(manifest, stage="audio.generate_or_import", artifact_id="audio_plan_json")
     schema = {
@@ -712,7 +731,7 @@ def make_openai_full_episode_payload(manifest: dict[str, Any], brief: dict[str, 
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side full episode render manifest planner for Aikiddo.",
         prompt=prompt,
         schema=schema,
@@ -1031,7 +1050,7 @@ def prepare_publish_video_assets(job_dir: pathlib.Path, manifest: dict[str, Any]
     return descriptors, [f"Prepared publish package assets: {len(assets)}"]
 
 
-def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     video_scenes = read_upstream_artifact_json(manifest, stage="video.scenes.generate", artifact_id="video_scenes_json")
     schema = {
@@ -1097,7 +1116,7 @@ def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side short-form reels render manifest planner for Aikiddo.",
         prompt=prompt,
         schema=schema,
@@ -1109,7 +1128,7 @@ def make_openai_reels_payload(manifest: dict[str, Any], brief: dict[str, Any]) -
     return payload
 
 
-def make_openai_compliance_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_compliance_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     reels = read_upstream_artifact_json(manifest, stage="render.reels", artifact_id="reels_json")
     schema = {
@@ -1170,7 +1189,7 @@ def make_openai_compliance_payload(manifest: dict[str, Any], brief: dict[str, An
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side safety and quality compliance reviewer for Aikiddo.",
         prompt=prompt,
         schema=schema,
@@ -1182,7 +1201,7 @@ def make_openai_compliance_payload(manifest: dict[str, Any], brief: dict[str, An
     return payload
 
 
-def make_openai_publish_package_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
+def make_local_model_publish_package_payload(manifest: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any]:
     full_episode = read_upstream_artifact_json(manifest, stage="render.full_episode", artifact_id="full_episode_json")
     reels = read_upstream_artifact_json(manifest, stage="render.reels", artifact_id="reels_json")
     compliance_report = read_upstream_artifact_json(
@@ -1242,7 +1261,7 @@ def make_openai_publish_package_payload(manifest: dict[str, Any], brief: dict[st
         ensure_ascii=False,
         indent=2,
     )
-    payload = call_openai_json(
+    payload = call_local_model_json(
         instructions="You are the server-side publish package manifest planner for Aikiddo.",
         prompt=prompt,
         schema=schema,
@@ -1301,7 +1320,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
         if worker_mode() == "deterministic":
             lyrics, song_plan, safety_notes = make_lyrics_payload(brief)
         else:
-            lyrics, song_plan, safety_notes = make_openai_lyrics_payload(manifest, brief)
+            lyrics, song_plan, safety_notes = make_local_model_lyrics_payload(manifest, brief)
         return [
             ("lyrics_txt", "lyrics", "lyrics.txt", "text/plain"),
             ("song_plan_json", "song_plan", "song_plan.json", "application/json"),
@@ -1324,7 +1343,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
             }
             style_frame_prompt = f"friendly preschool character set for {topic}, consistent design, safe gestures\n"
         else:
-            character_bible, style_frame_prompt = make_openai_character_payload(manifest, brief)
+            character_bible, style_frame_prompt = make_local_model_character_payload(manifest, brief)
         return [
             ("character_bible_json", "character_bible", "character_bible.json", "application/json"),
             ("style_frame_prompt_txt", "style_frame_prompt", "style_frame_prompt.txt", "text/plain"),
@@ -1349,7 +1368,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 "audio_plan.json": audio_plan,
                 "audio_preview.wav": {"kind": "audio"},
             }
-        audio_plan, audio_preview = make_openai_audio_payload(manifest, brief)
+        audio_plan, audio_preview = make_local_model_audio_payload(manifest, brief)
         return [
             ("audio_plan_json", "audio_plan", "audio_plan.json", "application/json"),
             ("audio_preview_mp3", "audio_preview", "audio_preview.mp3", "audio/mpeg"),
@@ -1373,7 +1392,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 "safety_checks": ["no fear pressure", "no unsafe imitation", "no rapid flashes"],
             }
         else:
-            storyboard = make_openai_storyboard_payload(manifest, brief)
+            storyboard = make_local_model_storyboard_payload(manifest, brief)
         return [("storyboard_json", "storyboard", "storyboard.json", "application/json")], {
             "storyboard.json": storyboard,
         }
@@ -1395,7 +1414,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 "keyframe_prompts.txt": keyframe_prompts,
             }
         else:
-            keyframes_payload, keyframe_prompts = make_openai_keyframes_payload(manifest, brief)
+            keyframes_payload, keyframe_prompts = make_local_model_keyframes_payload(manifest, brief)
             descriptors = [
                 ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
                 ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
@@ -1408,7 +1427,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 filename = f"keyframe_{index:02d}.png"
                 frame["image_filename"] = filename
                 descriptors.append((f"keyframe_{index:02d}_png", "keyframe_image", filename, "image/png"))
-                payloads[filename] = call_openai_image(prompt=str(frame["image_prompt"]))
+                payloads[filename] = call_local_model_image(prompt=str(frame["image_prompt"]))
         return descriptors, payloads
 
     if stage == "video.scenes.generate":
@@ -1424,14 +1443,14 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
                 "status": "ready_for_scene_review",
             }
         else:
-            video_scenes = make_openai_video_scenes_payload(manifest, brief)
+            video_scenes = make_local_model_video_scenes_payload(manifest, brief)
         return [("video_scenes_json", "video_scenes", "video_scenes.json", "application/json")], {
             "video_scenes.json": video_scenes,
         }
 
     if stage == "render.full_episode":
         if worker_mode() != "deterministic":
-            full_episode = make_openai_full_episode_payload(manifest, brief)
+            full_episode = make_local_model_full_episode_payload(manifest, brief)
             render_plan, ffmpeg_commands = make_full_episode_render_plan(manifest, full_episode)
             return [
                 ("full_episode_json", "full_episode", "full_episode.json", "application/json"),
@@ -1459,7 +1478,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
     if stage == "render.reels":
         if worker_mode() != "deterministic":
             return [("reels_json", "reels", "reels.json", "application/json")], {
-                "reels.json": make_openai_reels_payload(manifest, brief),
+                "reels.json": make_local_model_reels_payload(manifest, brief),
             }
         reels = [
             {"id": "reel_01", "aspect_ratio": "9:16", "duration_seconds": 18, "output_path": f"renders/{episode_slug}/reel-01.mp4"},
@@ -1473,7 +1492,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
     if stage == "quality.compliance_report":
         if worker_mode() != "deterministic":
             return [("compliance_report_json", "compliance_report", "compliance_report.json", "application/json")], {
-                "compliance_report.json": make_openai_compliance_payload(manifest, brief),
+                "compliance_report.json": make_local_model_compliance_payload(manifest, brief),
             }
         return [("compliance_report_json", "compliance_report", "compliance_report.json", "application/json")], {
             "compliance_report.json": {
@@ -1491,7 +1510,7 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
     if stage == "publish.prepare_package":
         if worker_mode() != "deterministic":
             return [("publish_package_json", "publish_package", "publish_package.json", "application/json")], {
-                "publish_package.json": make_openai_publish_package_payload(manifest, brief),
+                "publish_package.json": make_local_model_publish_package_payload(manifest, brief),
             }
         return [
             ("publish_package_json", "publish_package", "publish_package.json", "application/json"),

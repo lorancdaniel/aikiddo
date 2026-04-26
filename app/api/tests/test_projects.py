@@ -167,10 +167,10 @@ def deterministic_worker_env() -> dict[str, str]:
     return {**os.environ, "AIKIDDO_WORKER_MODE": "deterministic"}
 
 
-def production_worker_env_without_openai_key() -> dict[str, str]:
+def production_worker_env_without_local_text_endpoint() -> dict[str, str]:
     env = {**os.environ}
     env.pop("AIKIDDO_WORKER_MODE", None)
-    env.pop("OPENAI_API_KEY", None)
+    env.pop("AIKIDDO_TEXT_ENDPOINT", None)
     return env
 
 
@@ -269,7 +269,7 @@ def test_aikiddo_worker_smoke_script_runs_full_deterministic_pipeline(tmp_path: 
     assert publish_payload["status"] == "ready_for_operator_upload"
 
 
-def test_aikiddo_worker_requires_openai_key_for_production_lyrics(tmp_path: Path) -> None:
+def test_aikiddo_worker_requires_local_text_endpoint_for_production_lyrics(tmp_path: Path) -> None:
     job_dir = tmp_path / "job_requires_provider"
     job_dir.mkdir()
     manifest = {
@@ -299,22 +299,22 @@ def test_aikiddo_worker_requires_openai_key_for_production_lyrics(tmp_path: Path
         [sys.executable, str(worker_path), str(job_dir)],
         text=True,
         capture_output=True,
-        env=production_worker_env_without_openai_key(),
+        env=production_worker_env_without_local_text_endpoint(),
         timeout=10,
         check=False,
     )
 
     assert result.returncode != 0
-    assert result.stderr.strip() == "worker_configuration_error=OPENAI_API_KEY is required for production text generation."
+    assert result.stderr.strip() == "worker_configuration_error=AIKIDDO_TEXT_ENDPOINT is required for local text generation."
     assert not (job_dir / "output_manifest.json").exists()
 
 
-def test_aikiddo_worker_uses_openai_provider_for_character_bible(monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_character_bible(monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "character and visual continuity planner" in instructions
         assert "characters.import_or_approve" in prompt
         assert schema["required"] == ["character_bible", "style_frame_prompt"]
@@ -328,7 +328,7 @@ def test_aikiddo_worker_uses_openai_provider_for_character_bible(monkeypatch) ->
             "style_frame_prompt": "brush_friend_v1 in a safe bright bathroom classroom scene",
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "characters.import_or_approve",
         {
@@ -350,12 +350,12 @@ def test_aikiddo_worker_uses_openai_provider_for_character_bible(monkeypatch) ->
     assert "brush_friend_v1" in payloads["style_frame_prompt.txt"]
 
 
-def test_aikiddo_worker_uses_openai_speech_for_audio_stage(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_speech_for_audio_stage(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
-    monkeypatch.setenv("AIKIDDO_OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-    monkeypatch.setenv("AIKIDDO_OPENAI_TTS_VOICE", "coral")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_AUDIO_MODEL", "YuE-s1-7B")
+    monkeypatch.setenv("AIKIDDO_AUDIO_VOICE", "local-child-safe-guide")
     lyrics_job_dir = tmp_path / "lyrics_job"
     lyrics_job_dir.mkdir()
     (lyrics_job_dir / "lyrics.txt").write_text("Brush, brush, smile bright.\n", encoding="utf-8")
@@ -366,12 +366,12 @@ def test_aikiddo_worker_uses_openai_speech_for_audio_stage(tmp_path: Path, monke
     lyrics_output_path = lyrics_job_dir / "output_manifest.json"
     lyrics_output_path.write_text(json.dumps(lyrics_output), encoding="utf-8")
 
-    def fake_call_openai_speech(*, input_text: str, instructions: str) -> bytes:
+    def fake_call_local_model_speech(*, input_text: str, instructions: str) -> bytes:
         assert "Brush, brush" in input_text
         assert "AI-generated guide voice" in instructions
         return b"fake-mp3-bytes"
 
-    monkeypatch.setattr(worker, "call_openai_speech", fake_call_openai_speech)
+    monkeypatch.setattr(worker, "call_local_model_speech", fake_call_local_model_speech)
     descriptors, payloads = worker.stage_files(
         "audio.generate_or_import",
         {
@@ -389,14 +389,14 @@ def test_aikiddo_worker_uses_openai_speech_for_audio_stage(tmp_path: Path, monke
 
     assert ("audio_preview_mp3", "audio_preview", "audio_preview.mp3", "audio/mpeg") in descriptors
     assert payloads["audio_preview.mp3"] == b"fake-mp3-bytes"
-    assert payloads["audio_plan.json"]["disclosure"] == "AI-generated voice draft for operator review."
-    assert payloads["audio_plan.json"]["voice"] == "coral"
+    assert payloads["audio_plan.json"]["disclosure"] == "Locally generated audio draft for operator review."
+    assert payloads["audio_plan.json"]["voice"] == "local-child-safe-guide"
 
 
-def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_storyboard(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     lyrics_job_dir = tmp_path / "lyrics_job"
     lyrics_job_dir.mkdir()
@@ -446,7 +446,7 @@ def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monk
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "storyboard planner" in instructions
         assert "Brush, brush" in prompt
         assert "brush_friend_v1" in prompt
@@ -484,7 +484,7 @@ def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monk
             "safety_checks": ["no fear pressure", "no unsafe imitation", "no rapid flashes"],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "storyboard.generate",
         {
@@ -509,10 +509,10 @@ def test_aikiddo_worker_uses_openai_provider_for_storyboard(tmp_path: Path, monk
     assert payloads["storyboard.json"]["safety_checks"] == ["no fear pressure", "no unsafe imitation", "no rapid flashes"]
 
 
-def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_keyframes(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     character_job_dir = tmp_path / "character_job"
     character_job_dir.mkdir()
@@ -571,7 +571,7 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "keyframe prompt planner" in instructions
         assert "scene_01_opening" in prompt
         assert "brush_friend_v1 in a safe bright bathroom classroom scene" in prompt
@@ -613,12 +613,12 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
 
     generated_image_prompts: list[str] = []
 
-    def fake_call_openai_image(*, prompt: str) -> bytes:
+    def fake_call_local_model_image(*, prompt: str) -> bytes:
         generated_image_prompts.append(prompt)
         return b"\x89PNG\r\n\x1a\nfake-keyframe-image"
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
-    monkeypatch.setattr(worker, "call_openai_image", fake_call_openai_image, raising=False)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
+    monkeypatch.setattr(worker, "call_local_model_image", fake_call_local_model_image, raising=False)
     descriptors, payloads = worker.stage_files(
         "keyframes.generate",
         {
@@ -648,10 +648,10 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
     assert "soft 2D keyframe of brush_friend_v1" in payloads["keyframe_prompts.txt"]
 
 
-def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_video_scenes(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     audio_job_dir = tmp_path / "audio_job"
     audio_job_dir.mkdir()
@@ -747,7 +747,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "video scene planner" in instructions
         assert "keyframe_01" in prompt
         assert "keyframe_01.png" in prompt
@@ -800,7 +800,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
             ],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "video.scenes.generate",
         {
@@ -827,15 +827,15 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
     assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_image"] == "keyframe_01.png"
 
 
-def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_full_episode_render_manifest(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     audio_job_dir = tmp_path / "audio_job"
     audio_job_dir.mkdir()
     (audio_job_dir / "audio_plan.json").write_text(
-        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "coral"}),
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "local-child-safe-guide"}),
         encoding="utf-8",
     )
     audio_output_path = audio_job_dir / "output_manifest.json"
@@ -925,7 +925,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "full episode render manifest planner" in instructions
         assert "video_scene_01" in prompt
         assert "audio_preview_ready" in prompt
@@ -948,7 +948,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
             "scene_count": 3,
             "output_path": "renders/brush-song/full-episode.mp4",
             "poster_frame": "video_scene_01",
-            "audio_mix_note": "Use coral voice preview as review audio bed.",
+            "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
             "assembly_notes": [
                 "Concatenate approved scene renders in timeline order.",
                 "Apply gentle loudness normalization before review export.",
@@ -956,7 +956,7 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
             "status": "draft",
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "render.full_episode",
         {
@@ -989,13 +989,13 @@ def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tm
 
 def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     audio_job_dir = tmp_path / "audio_job"
     audio_job_dir.mkdir()
     (audio_job_dir / "audio_plan.json").write_text(
-        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "coral"}),
+        json.dumps({"title": "Brush Song", "format": "mp3", "status": "audio_preview_ready", "voice": "local-child-safe-guide"}),
         encoding="utf-8",
     )
     audio_output_path = audio_job_dir / "output_manifest.json"
@@ -1058,7 +1058,7 @@ def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monke
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "full episode render manifest planner" in instructions
         return {
             "title": "Brush Song",
@@ -1067,7 +1067,7 @@ def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monke
             "scene_count": 1,
             "output_path": "renders/brush-song/full-episode.mp4",
             "poster_frame": "video_scene_01",
-            "audio_mix_note": "Use coral voice preview as review audio bed.",
+            "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
             "assembly_notes": ["Concatenate approved scene renders."],
             "status": "draft",
         }
@@ -1081,7 +1081,7 @@ def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monke
         output_path.write_bytes(b"fake mp4 bytes")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     monkeypatch.setattr(worker.subprocess, "run", fake_run)
 
     job_dir = tmp_path / "render_job"
@@ -1113,10 +1113,10 @@ def test_aikiddo_worker_renders_full_episode_mp4_artifacts(tmp_path: Path, monke
     assert any("Rendered full episode MP4" in line for line in logs)
 
 
-def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_reels_render_manifest(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     episode_job_dir = tmp_path / "full_episode_job"
     episode_job_dir.mkdir()
@@ -1131,7 +1131,7 @@ def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path:
                 "scene_count": 3,
                 "output_path": "renders/brush-song/full-episode.mp4",
                 "poster_frame": "video_scene_01",
-                "audio_mix_note": "Use coral voice preview as review audio bed.",
+                "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
                 "assembly_notes": ["Concatenate approved scene renders in timeline order."],
                 "status": "server_render_manifest_ready",
             }
@@ -1208,7 +1208,7 @@ def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path:
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "short-form reels render manifest planner" in instructions
         assert "renders/brush-song/full-episode.mp4" in prompt
         assert "video_scene_02" in prompt
@@ -1261,7 +1261,7 @@ def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path:
             ],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "render.reels",
         {
@@ -1289,8 +1289,8 @@ def test_aikiddo_worker_uses_openai_provider_for_reels_render_manifest(tmp_path:
 
 def test_aikiddo_worker_renders_reel_mp4_artifacts(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     episode_job_dir = tmp_path / "full_episode_job"
     episode_job_dir.mkdir(parents=True)
@@ -1350,7 +1350,7 @@ def test_aikiddo_worker_renders_reel_mp4_artifacts(tmp_path: Path, monkeypatch) 
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "short-form reels render manifest planner" in instructions
         return {
             "title": "Brush Song",
@@ -1382,7 +1382,7 @@ def test_aikiddo_worker_renders_reel_mp4_artifacts(tmp_path: Path, monkeypatch) 
         output_path.write_bytes(b"fake reel mp4")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     monkeypatch.setattr(worker.subprocess, "run", fake_run)
 
     job_dir = tmp_path / "reels_job"
@@ -1411,10 +1411,10 @@ def test_aikiddo_worker_renders_reel_mp4_artifacts(tmp_path: Path, monkeypatch) 
     assert any("Rendered reel MP4" in line for line in logs)
 
 
-def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_compliance_report(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     episode_job_dir = tmp_path / "full_episode_job"
     episode_job_dir.mkdir()
@@ -1429,7 +1429,7 @@ def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Pat
                 "scene_count": 3,
                 "output_path": "renders/brush-song/full-episode.mp4",
                 "poster_frame": "video_scene_01",
-                "audio_mix_note": "Use coral voice preview as review audio bed.",
+                "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
                 "assembly_notes": ["Concatenate approved scene renders in timeline order."],
                 "status": "server_render_manifest_ready",
             }
@@ -1485,7 +1485,7 @@ def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Pat
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "safety and quality compliance reviewer" in instructions
         assert "renders/brush-song/full-episode.mp4" in prompt
         assert "renders/brush-song/reel-01.mp4" in prompt
@@ -1540,7 +1540,7 @@ def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Pat
             ],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "quality.compliance_report",
         {
@@ -1566,10 +1566,10 @@ def test_aikiddo_worker_uses_openai_provider_for_compliance_report(tmp_path: Pat
     assert payloads["compliance_report.json"]["checks"][3]["status"] == "review"
 
 
-def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path, monkeypatch) -> None:
+def test_aikiddo_worker_uses_local_model_provider_for_publish_package(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     episode_job_dir = tmp_path / "full_episode_job"
     episode_job_dir.mkdir()
@@ -1584,7 +1584,7 @@ def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path,
                 "scene_count": 3,
                 "output_path": "renders/brush-song/full-episode.mp4",
                 "poster_frame": "video_scene_01",
-                "audio_mix_note": "Use coral voice preview as review audio bed.",
+                "audio_mix_note": "Use local-child-safe-guide voice preview as review audio bed.",
                 "assembly_notes": ["Concatenate approved scene renders in timeline order."],
                 "status": "server_render_manifest_ready",
             }
@@ -1675,7 +1675,7 @@ def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path,
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "publish package manifest planner" in instructions
         assert "renders/brush-song/full-episode.mp4" in prompt
         assert "renders/brush-song/reel-01.mp4" in prompt
@@ -1714,7 +1714,7 @@ def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path,
             ],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
     descriptors, payloads = worker.stage_files(
         "publish.prepare_package",
         {
@@ -1744,8 +1744,8 @@ def test_aikiddo_worker_uses_openai_provider_for_publish_package(tmp_path: Path,
 
 def test_aikiddo_worker_prepares_publish_video_asset_artifacts(tmp_path: Path, monkeypatch) -> None:
     worker = load_worker_module()
-    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider")
+    monkeypatch.setenv("AIKIDDO_WORKER_MODE", "local_model")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "sk-test-provider")
 
     episode_job_dir = tmp_path / "full_episode_job"
     episode_job_dir.mkdir()
@@ -1823,7 +1823,7 @@ def test_aikiddo_worker_prepares_publish_video_asset_artifacts(tmp_path: Path, m
         encoding="utf-8",
     )
 
-    def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
+    def fake_call_local_model_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "publish package manifest planner" in instructions
         return {
             "title": "Brush Song",
@@ -1838,7 +1838,7 @@ def test_aikiddo_worker_prepares_publish_video_asset_artifacts(tmp_path: Path, m
             "operator_checklist": ["Verify final rendered files exist on the server."],
         }
 
-    monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_local_model_json", fake_call_local_model_json)
 
     job_dir = tmp_path / "publish_job"
     job_dir.mkdir()
@@ -2038,7 +2038,8 @@ def test_remote_pilot_endpoint_is_retired(tmp_path: Path) -> None:
 
 def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypatch) -> None:
     client = make_client(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-worker")
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "http://127.0.0.1:8001/v1/chat/completions")
+    monkeypatch.setenv("AIKIDDO_TEXT_MODEL", "Qwen/Qwen3.6-27B")
     project = client.post(
         "/api/projects",
         json={
@@ -2098,7 +2099,8 @@ def test_project_job_writes_server_manifest_through_ssh(tmp_path: Path, monkeypa
         "audio_preview_wav",
     ]
     assert any("job_manifest.json" in call["input"] for call in calls if call["input"])
-    assert any("export OPENAI_API_KEY=sk-test-worker" in call["input"] for call in calls if call["input"])
+    assert any("export AIKIDDO_TEXT_ENDPOINT=http://127.0.0.1:8001/v1/chat/completions" in call["input"] for call in calls if call["input"])
+    assert any("export AIKIDDO_TEXT_MODEL=Qwen/Qwen3.6-27B" in call["input"] for call in calls if call["input"])
     assert not (tmp_path / "projects" / project["id"] / "remote-pilot.json").exists()
     assert (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 

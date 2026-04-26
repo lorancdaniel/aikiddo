@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, BookOpenCheck, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, RotateCcw, Server, Sparkles, Target, Wand2, XCircle } from "lucide-react";
+import { Activity, Archive, ArrowRight, BookOpenCheck, CheckCircle2, Clapperboard, Download, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, RotateCcw, Server, Sparkles, Target, Wand2, XCircle } from "lucide-react";
 import {
   AntiRepetitionReport,
   approveEpisodeSpec,
@@ -127,6 +127,12 @@ function statusClass(status: string) {
 
 function fileNameFromPath(path: string) {
   return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getStageStatus(project: Project | null, stage: string) {
@@ -366,6 +372,20 @@ export default function Home() {
     if (!selectedProject?.series_id) return null;
     return seriesList.find((series) => series.id === selectedProject.series_id) ?? null;
   }, [selectedProject, seriesList]);
+
+  const publishPrimaryArtifacts = useMemo(() => {
+    if (!selectedProject || serverJobDetail?.stage !== "publish.prepare_package") return [];
+    const priority = ["publish_package_zip", "publish_full_episode_mp4"];
+    return [...serverArtifacts]
+      .filter((artifact) => artifact.artifact_id === "publish_package_zip" || artifact.artifact_id === "publish_full_episode_mp4" || artifact.artifact_id.startsWith("publish_reel_"))
+      .sort((left, right) => {
+        const leftPriority = priority.indexOf(left.artifact_id);
+        const rightPriority = priority.indexOf(right.artifact_id);
+        const normalizedLeft = leftPriority === -1 ? 99 : leftPriority;
+        const normalizedRight = rightPriority === -1 ? 99 : rightPriority;
+        return normalizedLeft - normalizedRight || left.artifact_id.localeCompare(right.artifact_id);
+      });
+  }, [selectedProject, serverArtifacts, serverJobDetail?.stage]);
 
   const canRunLyrics = getStageStatus(selectedProject, "brief.generate") === "completed";
 
@@ -1509,6 +1529,45 @@ export default function Home() {
                 <p className="mt-3 text-4xl font-black leading-tight">Ready</p>
                 <p className="mt-4 text-sm font-semibold">{publishPackageArtifact.package_path}</p>
               </div>
+              {publishPrimaryArtifacts.length ? (
+                <div className="mt-4 grid grid-flow-dense grid-cols-1 gap-3 md:grid-cols-2" data-testid="publish-primary-downloads">
+                  {publishPrimaryArtifacts.map((artifact) => {
+                    const isArchive = artifact.artifact_id === "publish_package_zip";
+                    const downloadUrl =
+                      selectedProject && serverJobDetail
+                        ? buildApiUrl(`/api/projects/${selectedProject.id}/jobs/${serverJobDetail.id}/artifacts/${artifact.artifact_id}`)
+                        : "";
+                    return (
+                      <a
+                        key={artifact.artifact_id}
+                        className={`group overflow-hidden rounded-2xl border transition duration-500 hover:-translate-y-0.5 ${
+                          isArchive
+                            ? "border-[var(--acid)]/50 bg-[var(--acid)] p-5 text-[#101200] md:col-span-2"
+                            : "border-white/10 bg-white/7 p-4 text-white"
+                        }`}
+                        href={downloadUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className={`text-xs font-black uppercase ${isArchive ? "text-[#101200]/62" : "text-white/42"}`}>
+                              {isArchive ? "Finalny ZIP" : artifact.type}
+                            </p>
+                            <p className="mt-2 truncate text-lg font-black">{fileNameFromPath(artifact.filename)}</p>
+                            <p className={`mt-2 text-xs font-bold ${isArchive ? "text-[#101200]/62" : "text-white/45"}`}>
+                              {artifact.mime_type} · {formatBytes(artifact.size_bytes)}
+                            </p>
+                          </div>
+                          <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full transition duration-500 group-hover:scale-105 ${isArchive ? "bg-[#101200] text-white" : "bg-white text-[var(--ink)]"}`}>
+                            {isArchive ? <Archive size={18} /> : <Download size={18} />}
+                          </span>
+                        </div>
+                      </a>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/7 p-4">
                 <p className="text-sm font-black text-[var(--teal)]">Pliki wyjściowe</p>
                 <p className="mt-3 text-sm leading-6 text-white/70">{publishPackageArtifact.episode_output_path}</p>

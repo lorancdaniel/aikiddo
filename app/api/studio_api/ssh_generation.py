@@ -16,11 +16,20 @@ from .models import Brief, GenerationArtifact, GenerationPreview, RemotePilotRun
 class SshGenerationServer:
     adapter = "ssh"
     worker_env_keys = (
-        "OPENAI_API_KEY",
-        "AIKIDDO_OPENAI_TEXT_MODEL",
-        "AIKIDDO_OPENAI_TTS_MODEL",
-        "AIKIDDO_OPENAI_TTS_VOICE",
-        "AIKIDDO_OPENAI_TIMEOUT_SEC",
+        "AIKIDDO_TEXT_ENDPOINT",
+        "AIKIDDO_TEXT_API_KEY",
+        "AIKIDDO_TEXT_MODEL",
+        "AIKIDDO_AUDIO_ENDPOINT",
+        "AIKIDDO_AUDIO_API_KEY",
+        "AIKIDDO_AUDIO_MODEL",
+        "AIKIDDO_AUDIO_VOICE",
+        "AIKIDDO_IMAGE_ENDPOINT",
+        "AIKIDDO_IMAGE_API_KEY",
+        "AIKIDDO_IMAGE_MODEL",
+        "AIKIDDO_IMAGE_SIZE",
+        "AIKIDDO_VIDEO_ENDPOINT",
+        "AIKIDDO_VIDEO_MODEL",
+        "AIKIDDO_MODEL_TIMEOUT_SEC",
         "AIKIDDO_WORKER_MODE",
     )
 
