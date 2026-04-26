@@ -25,6 +25,7 @@ import {
   fetchJobEvents,
   fetchJobLog,
   fetchKeyframesArtifact,
+  fetchLocalModelStatus,
   fetchProjectApprovals,
   fetchProjectJobs,
   fetchProjectNextAction,
@@ -46,6 +47,7 @@ import {
   JobLog,
   KeyframesArtifact,
   linkProjectSeries,
+  LocalModelStatus,
   LyricsArtifact,
   Project,
   ProjectInput,
@@ -210,6 +212,7 @@ export default function Home() {
   const [seriesList, setSeriesList] = useState<SeriesBible[]>([]);
   const [connection, setConnection] = useState<ServerConnection | null>(null);
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
+  const [localModelStatus, setLocalModelStatus] = useState<LocalModelStatus | null>(null);
   const [lyricsArtifact, setLyricsArtifact] = useState<LyricsArtifact | null>(null);
   const [storyboardArtifact, setStoryboardArtifact] = useState<StoryboardArtifact | null>(null);
   const [keyframesArtifact, setKeyframesArtifact] = useState<KeyframesArtifact | null>(null);
@@ -289,6 +292,11 @@ export default function Home() {
           }
         } catch {
           setServerProfile(null);
+        }
+        try {
+          setLocalModelStatus(await fetchLocalModelStatus());
+        } catch {
+          setLocalModelStatus(null);
         }
         try {
           setQueueStatus(await fetchSshQueueStatus());
@@ -915,6 +923,48 @@ export default function Home() {
           <div className="mt-6 rounded-2xl bg-[var(--mist)] p-5 text-[var(--ink)]">
             <p className="text-sm font-bold">{connection?.message ?? "Sprawdzam profil serwera..."}</p>
             <p className="mt-5 text-5xl font-black">{connection?.reachable ? "ready" : "wait"}</p>
+          </div>
+          <div className="mt-5 rounded-2xl border border-white/10 bg-black/22 p-4" data-testid="local-model-status">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-black">Lokalne modele</p>
+                <p className="mt-1 text-sm leading-6 text-white/52">
+                  {localModelStatus?.summary ?? "Sprawdzam lokalną konfigurację generacji."}
+                </p>
+              </div>
+              <span
+                className={`status-pill ${
+                  localModelStatus?.ready ? "bg-[var(--teal)]/18 text-[var(--teal)]" : "bg-[var(--coral)]/18 text-[var(--coral)]"
+                }`}
+              >
+                {localModelStatus?.ready ? "local ready" : "missing"}
+              </span>
+            </div>
+            <div className="mt-4 grid gap-2">
+              {(localModelStatus?.adapters ?? []).map((adapter) => (
+                <div key={adapter.modality} className="rounded-xl border border-white/10 bg-white/7 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black text-white">{adapter.label}</p>
+                      <p className="mt-1 break-words text-xs font-bold text-white/48">{adapter.model}</p>
+                    </div>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-black ${
+                        adapter.configured ? "bg-[var(--teal)]/15 text-[var(--teal)]" : "bg-[var(--coral)]/15 text-[var(--coral)]"
+                      }`}
+                    >
+                      {adapter.configured ? "configured" : "missing"}
+                    </span>
+                  </div>
+                  <p className="mt-2 break-all text-xs font-semibold text-white/38">{adapter.endpoint_env}</p>
+                </div>
+              ))}
+              {!localModelStatus ? (
+                <div className="rounded-xl border border-white/10 bg-white/7 p-3 text-sm font-bold text-white/46">
+                  Status lokalnych modeli nie jest jeszcze dostępny.
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="mt-5 rounded-2xl border border-white/10 bg-black/22 p-4" data-testid="server-generation">
             <div className="flex flex-wrap items-start justify-between gap-3">

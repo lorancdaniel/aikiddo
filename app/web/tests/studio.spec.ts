@@ -7,6 +7,10 @@ test("operator sees a server-first generation cockpit", async ({ page }) => {
   await expect(page.getByText("generowanie na serwerze")).toBeVisible();
   await expect(page.getByTestId("server-generation")).toContainText("Generacja serwerowa");
   await expect(page.getByTestId("server-generation")).toContainText("Zapisz profil serwera");
+  await expect(page.getByTestId("local-model-status")).toContainText("Lokalne modele");
+  await expect(page.getByTestId("local-model-status")).toContainText("Qwen/Qwen3.6-27B");
+  await expect(page.getByTestId("local-model-status")).toContainText("AIKIDDO_TEXT_ENDPOINT");
+  await expect(page.getByTestId("local-model-status")).not.toContainText("http://127.0.0.1");
   await expect(page.getByText("Mock", { exact: false })).toHaveCount(0);
   await expect(page.getByText("mock", { exact: false })).toHaveCount(0);
 
@@ -134,6 +138,19 @@ test("operator sees primary publish package downloads", async ({ page }) => {
     if (path === "/api/projects") return json([project]);
     if (path === "/api/series") return json([]);
     if (path === "/api/server/profile") return json({ detail: "Server profile not found" }, 404);
+    if (path === "/api/server/local-models") {
+      return json({
+        mode: "local_only",
+        ready: false,
+        summary: "Missing local endpoints: text, audio, image, video.",
+        adapters: [
+          { modality: "text", label: "Text planning", model: "Qwen/Qwen3.6-27B", endpoint_env: "AIKIDDO_TEXT_ENDPOINT", configured: false, status: "missing_endpoint" },
+          { modality: "audio", label: "Audio generation", model: "YuE-s1-7B", endpoint_env: "AIKIDDO_AUDIO_ENDPOINT", configured: false, status: "missing_endpoint" },
+          { modality: "image", label: "Image keyframes", model: "FLUX.1-dev", endpoint_env: "AIKIDDO_IMAGE_ENDPOINT", configured: false, status: "missing_endpoint" },
+          { modality: "video", label: "Image-to-video", model: "Wan2.2-I2V-A14B", endpoint_env: "AIKIDDO_VIDEO_ENDPOINT", configured: false, status: "missing_endpoint" }
+        ]
+      });
+    }
     if (path === "/api/queue/ssh-default") return json({ adapter: "ssh", auto_dispatch: true, queued_count: 0, queued_job_ids: [], current_lock: null, current_job_id: null, oldest_queued_job_id: null });
     if (path === "/api/projects/project_publish/jobs") return json([{ id: "job_publish", project_id: "project_publish", stage: "publish.prepare_package", status: "completed", adapter: "ssh", message: "Publish package ready.", created_at: now, updated_at: now }]);
     if (path === "/api/jobs/job_publish") {

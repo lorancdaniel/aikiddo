@@ -174,6 +174,20 @@ def production_worker_env_without_local_text_endpoint() -> dict[str, str]:
     return env
 
 
+def clear_local_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in [
+        "AIKIDDO_TEXT_ENDPOINT",
+        "AIKIDDO_TEXT_MODEL",
+        "AIKIDDO_AUDIO_ENDPOINT",
+        "AIKIDDO_AUDIO_MODEL",
+        "AIKIDDO_IMAGE_ENDPOINT",
+        "AIKIDDO_IMAGE_MODEL",
+        "AIKIDDO_VIDEO_ENDPOINT",
+        "AIKIDDO_VIDEO_MODEL",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+
 def load_worker_module():
     worker_path = Path(__file__).resolve().parents[3] / "scripts" / "aikiddo_worker.py"
     spec = importlib.util.spec_from_file_location("aikiddo_worker_under_test", worker_path)
@@ -3478,6 +3492,61 @@ def test_server_profile_can_be_saved_and_loaded(tmp_path: Path) -> None:
     saved = json.loads(config_file.read_text())
     assert saved["username"] == "studio"
     assert "password" not in saved
+
+
+def test_local_model_status_reports_missing_configuration_without_endpoint_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_local_model_env(monkeypatch)
+    client = make_client(tmp_path)
+
+    response = client.get("/api/server/local-models")
+
+    assert response.status_code == 200
+    status_payload = response.json()
+    assert status_payload["mode"] == "local_only"
+    assert status_payload["ready"] is False
+    assert status_payload["summary"] == "Missing local endpoints: text, audio, image, video."
+    assert [adapter["modality"] for adapter in status_payload["adapters"]] == ["text", "audio", "image", "video"]
+    assert all(adapter["configured"] is False for adapter in status_payload["adapters"])
+    assert status_payload["adapters"][0] == {
+        "modality": "text",
+        "label": "Text planning",
+        "model": "Qwen/Qwen3.6-27B",
+        "endpoint_env": "AIKIDDO_TEXT_ENDPOINT",
+        "configured": False,
+        "status": "missing_endpoint",
+    }
+    assert "http://" not in response.text
+    assert "127.0.0.1" not in response.text
+
+
+def test_local_model_status_reports_configured_models_without_endpoint_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIKIDDO_TEXT_ENDPOINT", "http://127.0.0.1:8001/v1/chat/completions")
+    monkeypatch.setenv("AIKIDDO_TEXT_MODEL", "Qwen/Qwen3.6-27B")
+    monkeypatch.setenv("AIKIDDO_AUDIO_ENDPOINT", "http://127.0.0.1:8002/v1/audio/speech")
+    monkeypatch.setenv("AIKIDDO_AUDIO_MODEL", "YuE-s1-7B")
+    monkeypatch.setenv("AIKIDDO_IMAGE_ENDPOINT", "http://127.0.0.1:8188/v1/images/generations")
+    monkeypatch.setenv("AIKIDDO_IMAGE_MODEL", "FLUX.1-dev")
+    monkeypatch.setenv("AIKIDDO_VIDEO_ENDPOINT", "http://127.0.0.1:8188/aikiddo/video")
+    monkeypatch.setenv("AIKIDDO_VIDEO_MODEL", "Wan2.2-I2V-A14B")
+    client = make_client(tmp_path)
+
+    response = client.get("/api/server/local-models")
+
+    assert response.status_code == 200
+    status_payload = response.json()
+    assert status_payload["ready"] is True
+    assert status_payload["summary"] == "All local generation endpoints are configured."
+    assert {adapter["model"] for adapter in status_payload["adapters"]} == {
+        "Qwen/Qwen3.6-27B",
+        "YuE-s1-7B",
+        "FLUX.1-dev",
+        "Wan2.2-I2V-A14B",
+    }
+    assert all(adapter["configured"] is True for adapter in status_payload["adapters"])
+    assert all(adapter["status"] == "configured" for adapter in status_payload["adapters"])
+    assert "AIKIDDO_TEXT_ENDPOINT" in response.text
+    assert "http://127.0.0.1" not in response.text
+    assert "/v1/chat/completions" not in response.text
 
 
 def test_mock_connection_uses_saved_server_profile(tmp_path: Path) -> None:

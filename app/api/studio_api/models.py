@@ -484,6 +484,22 @@ class ServerProfile(ServerProfileInput):
     updated_at: str
 
 
+class LocalModelAdapterStatus(BaseModel):
+    modality: Literal["text", "audio", "image", "video"]
+    label: str
+    model: str
+    endpoint_env: str
+    configured: bool
+    status: Literal["configured", "missing_endpoint"]
+
+
+class LocalModelStatus(BaseModel):
+    mode: Literal["local_only"] = "local_only"
+    ready: bool
+    summary: str
+    adapters: list[LocalModelAdapterStatus]
+
+
 class RemotePilotInput(BaseModel):
     stage: str = Field(default="lyrics.generate", min_length=1, max_length=120)
 

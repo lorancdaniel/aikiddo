@@ -196,6 +196,22 @@ export type ServerProfile = {
 
 export type ServerProfileInput = Omit<ServerProfile, "updated_at">;
 
+export type LocalModelAdapterStatus = {
+  modality: "text" | "audio" | "image" | "video";
+  label: string;
+  model: string;
+  endpoint_env: string;
+  configured: boolean;
+  status: "configured" | "missing_endpoint";
+};
+
+export type LocalModelStatus = {
+  mode: "local_only";
+  ready: boolean;
+  summary: string;
+  adapters: LocalModelAdapterStatus[];
+};
+
 export type GenerationArtifact = {
   artifact_id: string;
   type: string;
@@ -578,6 +594,10 @@ export function testServerConnection() {
 
 export function fetchServerProfile() {
   return request<ServerProfile>("/api/server/profile");
+}
+
+export function fetchLocalModelStatus() {
+  return request<LocalModelStatus>("/api/server/local-models");
 }
 
 export function saveServerProfile(input: ServerProfileInput) {

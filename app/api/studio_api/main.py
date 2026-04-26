@@ -29,6 +29,8 @@ from .models import (
     KeyframesArtifact,
     LockHeartbeatInput,
     LockHeartbeatResult,
+    LocalModelAdapterStatus,
+    LocalModelStatus,
     LyricsArtifact,
     PIPELINE_STAGES,
     Project,
@@ -165,6 +167,36 @@ def normalize_job_status(status_value: StageStatus) -> tuple[str, str]:
 
 SSH_WORKER_RESOURCE = "ssh_default"
 ADMIN_TOKEN_ENV = "STUDIO_ADMIN_TOKEN"
+LOCAL_MODEL_REGISTRY = [
+    {
+        "modality": "text",
+        "label": "Text planning",
+        "endpoint_env": "AIKIDDO_TEXT_ENDPOINT",
+        "model_env": "AIKIDDO_TEXT_MODEL",
+        "default_model": "Qwen/Qwen3.6-27B",
+    },
+    {
+        "modality": "audio",
+        "label": "Audio generation",
+        "endpoint_env": "AIKIDDO_AUDIO_ENDPOINT",
+        "model_env": "AIKIDDO_AUDIO_MODEL",
+        "default_model": "YuE-s1-7B",
+    },
+    {
+        "modality": "image",
+        "label": "Image keyframes",
+        "endpoint_env": "AIKIDDO_IMAGE_ENDPOINT",
+        "model_env": "AIKIDDO_IMAGE_MODEL",
+        "default_model": "FLUX.1-dev",
+    },
+    {
+        "modality": "video",
+        "label": "Image-to-video",
+        "endpoint_env": "AIKIDDO_VIDEO_ENDPOINT",
+        "model_env": "AIKIDDO_VIDEO_MODEL",
+        "default_model": "Wan2.2-I2V-A14B",
+    },
+]
 
 
 def create_app(projects_root: Path | None = None, allow_local_mock: bool | None = None) -> FastAPI:
@@ -200,6 +232,27 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             raise HTTPException(status_code=401, detail="Invalid studio admin token")
         if not secrets.compare_digest(x_studio_admin_token, expected):
             raise HTTPException(status_code=403, detail="Invalid studio admin token")
+
+    def build_local_model_status() -> LocalModelStatus:
+        adapters: list[LocalModelAdapterStatus] = []
+        missing_modalities: list[str] = []
+        for item in LOCAL_MODEL_REGISTRY:
+            configured = bool(os.getenv(item["endpoint_env"], "").strip())
+            if not configured:
+                missing_modalities.append(item["modality"])
+            adapters.append(
+                LocalModelAdapterStatus(
+                    modality=item["modality"],
+                    label=item["label"],
+                    model=os.getenv(item["model_env"], item["default_model"]).strip() or item["default_model"],
+                    endpoint_env=item["endpoint_env"],
+                    configured=configured,
+                    status="configured" if configured else "missing_endpoint",
+                )
+            )
+        ready = not missing_modalities
+        summary = "All local generation endpoints are configured." if ready else f"Missing local endpoints: {', '.join(missing_modalities)}."
+        return LocalModelStatus(ready=ready, summary=summary, adapters=adapters)
 
     def recover_stale_worker_lock(resource_key: str) -> StaleLockRecoveryResult:
         lock = storage.get_worker_lock_raw(resource_key)
@@ -550,6 +603,10 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         if profile is None:
             raise HTTPException(status_code=404, detail="Server profile not found")
         return profile
+
+    @app.get("/api/server/local-models", response_model=LocalModelStatus)
+    def get_local_model_status() -> LocalModelStatus:
+        return build_local_model_status()
 
     @app.put("/api/server/profile", response_model=ServerProfile)
     def save_server_profile(profile_input: ServerProfileInput) -> ServerProfile:
