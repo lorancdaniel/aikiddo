@@ -704,6 +704,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
 
     keyframes_job_dir = tmp_path / "keyframes_job"
     keyframes_job_dir.mkdir()
+    (keyframes_job_dir / "keyframe_01.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-keyframe-image")
     (keyframes_job_dir / "keyframes.json").write_text(
         json.dumps(
             {
@@ -719,6 +720,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
                         "composition": "medium-wide shot",
                         "continuity_note": "same palette",
                         "safety_note": "no climbing",
+                        "image_filename": "keyframe_01.png",
                     }
                 ],
             }
@@ -737,6 +739,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
                 "artifacts": [
                     {"artifact_id": "keyframes_json", "filename": "keyframes.json"},
                     {"artifact_id": "keyframe_prompts_txt", "filename": "keyframe_prompts.txt"},
+                    {"artifact_id": "keyframe_01_png", "filename": "keyframe_01.png", "mime_type": "image/png"},
                 ],
             }
         ),
@@ -746,8 +749,10 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
     def fake_call_openai_json(*, instructions: str, prompt: str, schema: dict) -> dict:
         assert "video scene planner" in instructions
         assert "keyframe_01" in prompt
+        assert "keyframe_01.png" in prompt
         assert "audio_preview_ready" in prompt
         assert "Do not claim that a video file has already been rendered." in prompt
+        assert "source_keyframe_image" in schema["properties"]["clips"]["items"]["required"]
         assert schema["properties"]["clips"]["minItems"] == 3
         return {
             "title": "Brush Song",
@@ -758,6 +763,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
                 {
                     "id": "video_scene_01",
                     "source_keyframe_id": "keyframe_01",
+                    "source_keyframe_image": "keyframe_01.png",
                     "scene_id": "scene_01_opening",
                     "duration_seconds": 4,
                     "motion_prompt": "small friendly wave, no sudden motion",
@@ -769,6 +775,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
                 {
                     "id": "video_scene_02",
                     "source_keyframe_id": "keyframe_01",
+                    "source_keyframe_image": "keyframe_01.png",
                     "scene_id": "scene_01_opening",
                     "duration_seconds": 4,
                     "motion_prompt": "slow brushing gesture loop",
@@ -780,6 +787,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
                 {
                     "id": "video_scene_03",
                     "source_keyframe_id": "keyframe_01",
+                    "source_keyframe_image": "keyframe_01.png",
                     "scene_id": "scene_01_opening",
                     "duration_seconds": 4,
                     "motion_prompt": "character smiles near the clean sink",
@@ -815,6 +823,7 @@ def test_aikiddo_worker_uses_openai_provider_for_video_scenes(tmp_path: Path, mo
     assert payloads["video_scenes.json"]["render_policy"] == "server-owned scene files"
     assert payloads["video_scenes.json"]["status"] == "ready_for_scene_review"
     assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_id"] == "keyframe_01"
+    assert payloads["video_scenes.json"]["clips"][0]["source_keyframe_image"] == "keyframe_01.png"
 
 
 def test_aikiddo_worker_uses_openai_provider_for_full_episode_render_manifest(tmp_path: Path, monkeypatch) -> None:

@@ -215,7 +215,7 @@ Stack:
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
 - Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
-- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
+- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; video.scenes.generate maps clips back to those PNG keyframes; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
 - Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
