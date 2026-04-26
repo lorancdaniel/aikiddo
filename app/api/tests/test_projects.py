@@ -377,6 +377,144 @@ def test_submit_job_queues_when_ssh_worker_slot_is_busy(tmp_path: Path, monkeypa
     assert not (tmp_path / "projects" / project["id"] / "remote-runs" / f"{job['id']}.json").exists()
 
 
+def test_cancel_queued_ssh_job_marks_pipeline_cancelled(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Cancelable server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    (locks_dir / "ssh_default.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "lock_busy_test",
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "attempt_id": "attempt_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("SSH worker should not run while the single-flight slot is busy")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
+    response = client.post(f"/api/jobs/{job['id']}/cancel")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["status"] == "cancelled"
+    assert detail["phase"] == "cancelled"
+    assert detail["failure_reason"] == "operator_cancelled"
+    assert detail["message"] == "Job cancelled by operator."
+    project_after_cancel = client.get(f"/api/projects/{project['id']}").json()
+    lyrics_stage = next(stage for stage in project_after_cancel["pipeline"] if stage["stage"] == "lyrics.generate")
+    assert lyrics_stage["status"] == "cancelled"
+    assert lyrics_stage["job_id"] == job["id"]
+    events = client.get(f"/api/jobs/{job['id']}/events").json()
+    assert [event["event"] for event in events] == ["queued", "cancelled"]
+
+
+def test_retry_cancelled_ssh_job_creates_new_attempt(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Retry server lyrics",
+            "topic": "colors",
+            "age_range": "3-5",
+            "emotional_tone": "calm",
+            "educational_goal": "child names one color",
+            "characters": [],
+        },
+    ).json()
+    client.post(f"/api/projects/{project['id']}/stages/brief.generate/approve", json={})
+    client.put(
+        "/api/server/profile",
+        json={
+            "mode": "ssh",
+            "label": "GPU tower",
+            "host": "studio.local",
+            "username": "daniel",
+            "port": 22,
+            "remote_root": "/home/daniel/aikiddo-worker",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "tailscale_name": "studio",
+        },
+    )
+    locks_dir = tmp_path / "projects" / ".studio" / "worker-locks"
+    locks_dir.mkdir(parents=True)
+    (locks_dir / "ssh_default.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "lock_busy_test",
+                "resource_key": "ssh_default",
+                "adapter": "ssh",
+                "job_id": "remote_busy",
+                "attempt_id": "attempt_busy",
+                "acquired_at": "2099-01-01T00:00:00+00:00",
+                "heartbeat_at": "2099-01-01T00:00:00+00:00",
+                "lease_expires_at": "2099-01-01T00:15:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("SSH worker should not run while the single-flight slot is busy")
+
+    monkeypatch.setattr("studio_api.ssh_generation.subprocess.run", fake_run)
+
+    cancelled_job = client.post(f"/api/projects/{project['id']}/jobs/lyrics.generate").json()
+    client.post(f"/api/jobs/{cancelled_job['id']}/cancel")
+    response = client.post(f"/api/jobs/{cancelled_job['id']}/retry")
+
+    assert response.status_code == 202
+    result = response.json()
+    assert result["retried_from_job_id"] == cancelled_job["id"]
+    retry_detail = result["job"]
+    assert retry_detail["id"] != cancelled_job["id"]
+    assert retry_detail["status"] == "queued"
+    assert retry_detail["queue_position"] == 1
+    project_after_retry = client.get(f"/api/projects/{project['id']}").json()
+    lyrics_stage = next(stage for stage in project_after_retry["pipeline"] if stage["stage"] == "lyrics.generate")
+    assert lyrics_stage["status"] == "queued"
+    assert lyrics_stage["job_id"] == retry_detail["id"]
+    old_events = client.get(f"/api/jobs/{cancelled_job['id']}/events").json()
+    new_events = client.get(f"/api/jobs/{retry_detail['id']}/events").json()
+    assert [event["event"] for event in old_events] == ["queued", "cancelled", "retry_requested"]
+    assert [event["event"] for event in new_events] == ["queued", "retry_of"]
+
+
 def test_dispatch_next_runs_oldest_queued_ssh_job(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("STUDIO_ADMIN_TOKEN", "test-admin-token")
     client = make_client(tmp_path)

@@ -13,6 +13,7 @@ class StageStatus(StrEnum):
     NEEDS_REVIEW = "needs_review"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 PIPELINE_STAGES = [
@@ -565,6 +566,11 @@ class GenerationJobDetail(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     updated_at: str
+
+
+class JobRetryResult(BaseModel):
+    retried_from_job_id: str
+    job: GenerationJobDetail
 
 
 class WorkerLock(BaseModel):

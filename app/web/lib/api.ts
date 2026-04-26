@@ -1,4 +1,4 @@
-export type StageStatus = "pending" | "queued" | "running" | "needs_review" | "completed" | "failed";
+export type StageStatus = "pending" | "queued" | "running" | "needs_review" | "completed" | "failed" | "cancelled";
 
 export type PipelineStage = {
   stage: string;
@@ -249,6 +249,11 @@ export type GenerationJobDetail = {
   started_at: string | null;
   finished_at: string | null;
   updated_at: string;
+};
+
+export type JobRetryResult = {
+  retried_from_job_id: string;
+  job: GenerationJobDetail;
 };
 
 export type JobEvent = {
@@ -573,6 +578,18 @@ export function saveServerProfile(input: ServerProfileInput) {
 
 export function fetchJobDetail(jobId: string) {
   return request<GenerationJobDetail>(`/api/jobs/${jobId}`);
+}
+
+export function cancelJob(jobId: string) {
+  return request<GenerationJobDetail>(`/api/jobs/${jobId}/cancel`, {
+    method: "POST"
+  });
+}
+
+export function retryJob(jobId: string) {
+  return request<JobRetryResult>(`/api/jobs/${jobId}/retry`, {
+    method: "POST"
+  });
 }
 
 export function fetchJobEvents(jobId: string, after = 0) {

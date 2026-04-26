@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Activity, ArrowRight, BookOpenCheck, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, Server, Sparkles, Target, Wand2 } from "lucide-react";
+import { Activity, ArrowRight, BookOpenCheck, CheckCircle2, Clapperboard, Film, Images, KeyRound, ListChecks, ListMusic, Loader2, Music2, PackageCheck, PanelsTopLeft, Play, RotateCcw, Server, Sparkles, Target, Wand2, XCircle } from "lucide-react";
 import {
   AntiRepetitionReport,
   approveEpisodeSpec,
   approveStage,
   ArtifactInventoryItem,
   buildApiUrl,
+  cancelJob,
   ComplianceReportArtifact,
   createSeries,
   createProject,
@@ -51,6 +52,7 @@ import {
   ProjectNextAction,
   PublishPackageArtifact,
   ReelsArtifact,
+  retryJob,
   runAntiRepetition,
   runStage,
   saveEpisodeSpec,
@@ -89,7 +91,8 @@ const statusLabels: Record<string, string> = {
   running: "pracuje",
   needs_review: "do akceptacji",
   completed: "gotowe",
-  failed: "błąd"
+  failed: "błąd",
+  cancelled: "anulowany"
 };
 
 function splitCharacters(value: string) {
@@ -117,7 +120,7 @@ function parseAgeRange(value: string) {
 function statusClass(status: string) {
   if (status === "completed") return "bg-[var(--teal)] text-[#07110f]";
   if (status === "needs_review") return "bg-[var(--acid)] text-[#101200]";
-  if (status === "failed") return "bg-[var(--coral)] text-white";
+  if (status === "failed" || status === "cancelled") return "bg-[var(--coral)] text-white";
   if (status === "running" || status === "queued") return "bg-[var(--violet)] text-white";
   return "bg-white/10 text-white/70";
 }
@@ -247,6 +250,7 @@ export default function Home() {
   const [isApprovingEpisodeSpec, setIsApprovingEpisodeSpec] = useState(false);
   const [isRunningAntiRepetition, setIsRunningAntiRepetition] = useState(false);
   const [runningStage, setRunningStage] = useState<string | null>(null);
+  const [jobAction, setJobAction] = useState<"cancel" | "retry" | null>(null);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [approvingStage, setApprovingStage] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -552,6 +556,52 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Nie udało się uruchomić etapu.");
     } finally {
       setRunningStage(null);
+    }
+  }
+
+  async function handleCancelServerJob() {
+    if (!selectedProject || !serverJobDetail) return;
+    setJobAction("cancel");
+    setError("");
+    setJobMessage("");
+
+    try {
+      const cancelled = await cancelJob(serverJobDetail.id);
+      setServerJobDetail(cancelled);
+      setServerArtifacts(cancelled.artifacts);
+      setServerEvents(await fetchJobEvents(cancelled.id));
+      setQueueStatus(await fetchSshQueueStatus());
+      const updatedProjects = await fetchProjects();
+      setProjects(updatedProjects);
+      setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
+      setJobMessage(cancelled.message);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się anulować joba.");
+    } finally {
+      setJobAction(null);
+    }
+  }
+
+  async function handleRetryServerJob() {
+    if (!selectedProject || !serverJobDetail) return;
+    setJobAction("retry");
+    setError("");
+    setJobMessage("");
+
+    try {
+      const retried = await retryJob(serverJobDetail.id);
+      setServerJobDetail(retried.job);
+      setServerArtifacts(retried.job.artifacts);
+      setServerEvents(await fetchJobEvents(retried.job.id));
+      setQueueStatus(await fetchSshQueueStatus());
+      const updatedProjects = await fetchProjects();
+      setProjects(updatedProjects);
+      setSelectedProject(updatedProjects.find((project) => project.id === selectedProject.id) ?? selectedProject);
+      setJobMessage(retried.job.message);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Nie udało się ponowić joba.");
+    } finally {
+      setJobAction(null);
     }
   }
 
@@ -919,6 +969,32 @@ export default function Home() {
                     <p className="mt-2 rounded-lg bg-[var(--coral)]/18 px-2 py-1 text-xs font-bold text-[var(--coral)]">
                       {serverJobDetail.error.message}
                     </p>
+                  ) : null}
+                  {serverJobDetail.status === "queued" || serverJobDetail.status === "running" || serverJobDetail.status === "failed" || serverJobDetail.status === "cancelled" || serverJobDetail.phase === "awaiting_review" ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {serverJobDetail.status === "queued" || serverJobDetail.status === "running" ? (
+                        <button
+                          className="inline-flex items-center gap-2 rounded-full border border-[var(--coral)]/40 px-3 py-1.5 text-xs font-black text-[var(--coral)] transition hover:bg-[var(--coral)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          type="button"
+                          onClick={handleCancelServerJob}
+                          disabled={jobAction !== null}
+                        >
+                          {jobAction === "cancel" ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
+                          Anuluj
+                        </button>
+                      ) : null}
+                      {serverJobDetail.status === "failed" || serverJobDetail.status === "cancelled" || serverJobDetail.phase === "awaiting_review" ? (
+                        <button
+                          className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-black text-[var(--ink)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
+                          type="button"
+                          onClick={handleRetryServerJob}
+                          disabled={jobAction !== null}
+                        >
+                          {jobAction === "retry" ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                          Ponów
+                        </button>
+                      ) : null}
+                    </div>
                   ) : null}
                   {serverEvents.length ? (
                     <div className="mt-3 grid gap-1 border-t border-white/10 pt-3 text-xs text-white/48">

@@ -25,6 +25,7 @@ from .models import (
     HUMAN_REVIEW_STAGES,
     Job,
     JobEvent,
+    JobRetryResult,
     KeyframesArtifact,
     LockHeartbeatInput,
     LockHeartbeatResult,
@@ -103,6 +104,17 @@ def get_project_next_action(project: Project, anti_repetition_report: AntiRepeti
             severity="blocker" if anti_repetition_report.status == "blocker" else "warning",
         )
 
+    blocked_stage = next((stage for stage in project.pipeline if stage.status in {StageStatus.FAILED, StageStatus.CANCELLED}), None)
+    if blocked_stage is not None:
+        label = STAGE_LABELS.get(blocked_stage.stage, blocked_stage.stage)
+        return ProjectNextAction(
+            action_type="fix_rejected_stage",
+            stage=blocked_stage.stage,
+            label=label,
+            message=f"{label} wymaga ponowienia albo ręcznej korekty.",
+            severity="blocker",
+        )
+
     review_stage = next((stage for stage in project.pipeline if stage.status == StageStatus.NEEDS_REVIEW), None)
     if review_stage is not None:
         label = STAGE_LABELS.get(review_stage.stage, review_stage.stage)
@@ -135,6 +147,8 @@ def get_project_next_action(project: Project, anti_repetition_report: AntiRepeti
 
 
 def normalize_job_status(status_value: StageStatus) -> tuple[str, str]:
+    if status_value == StageStatus.CANCELLED:
+        return "cancelled", "cancelled"
     if status_value == StageStatus.FAILED:
         return "failed", "failed"
     if status_value == StageStatus.RUNNING:
@@ -508,14 +522,9 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Remote pilot endpoint is retired; use project jobs instead")
 
-    @app.post("/api/projects/{project_id}/jobs/{stage}", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
-    def submit_job(project_id: str, stage: str) -> Job:
+    def validate_stage_can_run(project: Project, stage: str) -> None:
         if stage not in PIPELINE_STAGES:
             raise HTTPException(status_code=400, detail="Unknown pipeline stage")
-        project = storage.get_project(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-
         stage_index = PIPELINE_STAGES.index(stage)
         if stage_index > 0:
             previous_stage_name = PIPELINE_STAGES[stage_index - 1]
@@ -526,6 +535,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                     detail=f"Previous stage {previous_stage_name} must be completed first",
                 )
 
+    def create_generation_job(project: Project, stage: str) -> Job:
+        project_id = project.id
         profile = storage.get_server_profile()
         if profile is not None and profile.mode == "ssh":
             job = Job(
@@ -578,6 +589,16 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         set_pipeline_stage(project, stage, job)
         storage.save_project(project)
         return job
+
+    @app.post("/api/projects/{project_id}/jobs/{stage}", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
+    def submit_job(project_id: str, stage: str) -> Job:
+        if stage not in PIPELINE_STAGES:
+            raise HTTPException(status_code=400, detail="Unknown pipeline stage")
+        project = storage.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        validate_stage_can_run(project, stage)
+        return create_generation_job(project, stage)
 
     @app.post("/api/jobs/dispatch-next", response_model=DispatchNextResult)
     def dispatch_next_job(dispatch_input: DispatchNextInput, x_studio_admin_token: str | None = Header(default=None)) -> DispatchNextResult:
@@ -770,6 +791,57 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             finished_at=finished_at,
             updated_at=job.updated_at,
         )
+
+    @app.post("/api/jobs/{job_id}/cancel", response_model=GenerationJobDetail)
+    def cancel_job(job_id: str) -> GenerationJobDetail:
+        job = storage.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status not in {StageStatus.QUEUED, StageStatus.RUNNING}:
+            raise HTTPException(status_code=409, detail="Only queued or running jobs can be cancelled")
+
+        was_running = job.status == StageStatus.RUNNING
+        job.status = StageStatus.CANCELLED
+        job.failure_reason = "operator_cancelled"
+        job.message = "Job cancelled by operator."
+        job.updated_at = utc_now()
+        storage.save_job(job)
+        storage.append_job_event(job, "cancelled", job.message)
+
+        project = storage.get_project(job.project_id)
+        if project is not None:
+            current_stage = next((stage for stage in project.pipeline if stage.stage == job.stage), None)
+            if current_stage is not None and current_stage.job_id == job.id:
+                set_pipeline_stage(project, job.stage, job)
+                storage.save_project(project)
+
+        if job.adapter == "ssh":
+            lock = storage.get_worker_lock_raw(SSH_WORKER_RESOURCE)
+            if lock is not None and lock.job_id == job.id:
+                storage.release_worker_lock(SSH_WORKER_RESOURCE, job.id)
+                storage.append_job_event(job, "lock_released", "Worker lock released after operator cancellation.")
+                if was_running:
+                    dispatch_next_ssh_job(trigger="auto_drain", drain_remaining=True)
+
+        return build_generation_job_detail(storage.get_job(job.id) or job)
+
+    @app.post("/api/jobs/{job_id}/retry", response_model=JobRetryResult, status_code=status.HTTP_202_ACCEPTED)
+    def retry_job(job_id: str) -> JobRetryResult:
+        job = storage.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status not in {StageStatus.FAILED, StageStatus.CANCELLED, StageStatus.NEEDS_REVIEW}:
+            raise HTTPException(status_code=409, detail="Only failed, cancelled, or reviewable jobs can be retried")
+
+        project = storage.get_project(job.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        validate_stage_can_run(project, job.stage)
+        storage.append_job_event(job, "retry_requested", "Operator requested a new job attempt.")
+        retry = create_generation_job(project, job.stage)
+        storage.append_job_event(retry, "retry_of", f"Retry created from {job.id}.")
+        return JobRetryResult(retried_from_job_id=job.id, job=build_generation_job_detail(storage.get_job(retry.id) or retry))
 
     @app.get("/api/jobs/{job_id}", response_model=GenerationJobDetail)
     def get_job(job_id: str) -> GenerationJobDetail:
