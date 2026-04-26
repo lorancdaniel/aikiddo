@@ -470,7 +470,7 @@ class ServerConnection(BaseModel):
 
 
 class ServerProfileInput(BaseModel):
-    mode: Literal["mock", "ssh"] = "mock"
+    mode: Literal["mock", "ssh"] = "ssh"
     label: str = Field(min_length=1, max_length=80)
     host: str = Field(min_length=1, max_length=180)
     username: str = Field(min_length=1, max_length=80)

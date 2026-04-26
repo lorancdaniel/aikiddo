@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 from studio_api.main import create_app
 
 
-def make_client(tmp_path: Path) -> TestClient:
-    app = create_app(projects_root=tmp_path / "projects")
+def make_client(tmp_path: Path, allow_local_mock: bool = True) -> TestClient:
+    app = create_app(projects_root=tmp_path / "projects", allow_local_mock=allow_local_mock)
     return TestClient(app)
 
 
@@ -347,6 +347,15 @@ def test_health_reports_mock_adapter(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "adapter": "mock"}
+
+
+def test_health_reports_ssh_adapter_by_default(tmp_path: Path) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "adapter": "ssh"}
 
 
 def test_remote_pilot_endpoint_is_retired(tmp_path: Path) -> None:
@@ -1634,6 +1643,19 @@ def test_mock_server_connection_is_ready(tmp_path: Path) -> None:
     }
 
 
+def test_server_connection_requires_ssh_profile_by_default(tmp_path: Path) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+
+    response = client.post("/api/server/test-connection")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mode": "ssh",
+        "reachable": False,
+        "message": "SSH server profile is required before generation.",
+    }
+
+
 def test_server_profile_can_be_saved_and_loaded(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
@@ -1692,6 +1714,31 @@ def test_mock_connection_uses_saved_server_profile(tmp_path: Path) -> None:
         "reachable": True,
         "message": "Mock GPU server profile 'GPU tower draft' is ready for local development.",
     }
+
+
+def test_generation_requires_ssh_profile_by_default(tmp_path: Path) -> None:
+    client = make_client(tmp_path, allow_local_mock=False)
+    created = client.post(
+        "/api/projects",
+        json={
+            "title": "Server required",
+            "topic": "kolory",
+            "age_range": "3-5",
+            "emotional_tone": "spokój",
+            "educational_goal": "dziecko rozpoznaje podstawowe kolory",
+            "characters": [],
+        },
+    ).json()
+
+    client.post(f"/api/projects/{created['id']}/stages/brief.generate/approve", json={})
+    response = client.post(f"/api/projects/{created['id']}/jobs/lyrics.generate")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "SSH server profile is required before generation"}
+    project = client.get(f"/api/projects/{created['id']}").json()
+    lyric_stage = next(item for item in project["pipeline"] if item["stage"] == "lyrics.generate")
+    assert lyric_stage["status"] == "pending"
+    assert lyric_stage["job_id"] is None
 
 
 def test_submit_mock_job_updates_pipeline_and_job_can_be_read(tmp_path: Path) -> None:

@@ -166,9 +166,10 @@ SSH_WORKER_RESOURCE = "ssh_default"
 ADMIN_TOKEN_ENV = "STUDIO_ADMIN_TOKEN"
 
 
-def create_app(projects_root: Path | None = None) -> FastAPI:
+def create_app(projects_root: Path | None = None, allow_local_mock: bool | None = None) -> FastAPI:
     configured_root = os.getenv("STUDIO_PROJECTS_ROOT")
     default_root = Path(configured_root) if configured_root else Path(__file__).resolve().parents[3] / "projects"
+    local_mock_enabled = allow_local_mock if allow_local_mock is not None else os.getenv("STUDIO_ALLOW_LOCAL_MOCK") == "1"
     storage = ProjectStorage(projects_root or default_root)
     mock_server = MockGpuServer()
     ssh_server = SshGenerationServer()
@@ -352,7 +353,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "adapter": mock_server.adapter}
+        return {"status": "ok", "adapter": mock_server.adapter if local_mock_enabled else ssh_server.adapter}
 
     @app.get("/api/projects", response_model=list[Project])
     def list_projects() -> list[Project]:
@@ -534,7 +535,13 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
         profile = storage.get_server_profile()
         if profile is not None and profile.mode == "ssh":
             return ssh_server.test_connection(profile)
-        return mock_server.test_connection(profile)
+        if local_mock_enabled:
+            return mock_server.test_connection(profile)
+        return {
+            "mode": "ssh",
+            "reachable": False,
+            "message": "SSH server profile is required before generation.",
+        }
 
     @app.get("/api/server/profile", response_model=ServerProfile)
     def get_server_profile() -> ServerProfile:
@@ -595,7 +602,7 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
             storage.save_project(project)
             dispatch_next_ssh_job(trigger="auto_drain", drain_remaining=True)
             job = storage.get_job(job.id) or job
-        else:
+        elif local_mock_enabled:
             job = mock_server.submit_job(project_id=project_id, stage=stage)
             storage.save_job(job)
             if stage == "lyrics.generate":
@@ -625,6 +632,8 @@ def create_app(projects_root: Path | None = None) -> FastAPI:
                         storage.get_compliance_report(project_id),
                     ),
                 )
+        else:
+            raise HTTPException(status_code=409, detail="SSH server profile is required before generation")
         set_pipeline_stage(project, stage, job)
         storage.save_project(project)
         return job
