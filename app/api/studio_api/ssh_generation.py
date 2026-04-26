@@ -298,6 +298,33 @@ python3 "$job_dir/aikiddo_worker.py" "$job_dir"
             raise ValueError(artifact_id)
         return artifact, result.stdout
 
+    def fetch_artifact_range(
+        self,
+        profile: ServerProfile,
+        run: RemotePilotRun,
+        artifact: GenerationArtifact,
+        *,
+        start: int,
+        length: int,
+    ) -> bytes:
+        if start < 0 or length < 1:
+            raise ValueError(artifact.artifact_id)
+        remote_path = f"{run.remote_job_dir.rstrip('/')}/{artifact.filename}"
+        result = subprocess.run(
+            [
+                *self._ssh_base_command(profile),
+                f"dd if={shlex.quote(remote_path)} bs=1M skip={start} count={length} iflag=skip_bytes,count_bytes status=none",
+            ],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise FileNotFoundError(artifact.artifact_id)
+        if len(result.stdout) != length:
+            raise ValueError(artifact.artifact_id)
+        return result.stdout
+
     def fetch_log(self, profile: ServerProfile, run: RemotePilotRun) -> str:
         remote_path = f"{run.remote_job_dir.rstrip('/')}/worker.log"
         result = subprocess.run(

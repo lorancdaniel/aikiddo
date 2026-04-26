@@ -61,6 +61,38 @@ from .ssh_generation import SshGenerationServer
 from .storage import ProjectStorage
 
 
+def parse_http_byte_range(range_header: str, total_size: int) -> tuple[int, int] | None:
+    if not range_header.startswith("bytes=") or total_size < 1:
+        return None
+    range_spec = range_header.removeprefix("bytes=").strip()
+    if "," in range_spec or "-" not in range_spec:
+        return None
+    start_text, end_text = range_spec.split("-", 1)
+    if start_text == "":
+        if not end_text.isdigit():
+            return None
+        suffix_length = int(end_text)
+        if suffix_length < 1:
+            return None
+        start = max(total_size - suffix_length, 0)
+        end = total_size - 1
+        return start, end
+    if not start_text.isdigit():
+        return None
+    start = int(start_text)
+    if start >= total_size:
+        return None
+    if end_text == "":
+        end = total_size - 1
+    elif end_text.isdigit():
+        end = min(int(end_text), total_size - 1)
+    else:
+        return None
+    if end < start:
+        return None
+    return start, end
+
+
 def get_project_next_action(project: Project, anti_repetition_report: AntiRepetitionReport | None = None) -> ProjectNextAction:
     if project.series_id is None:
         return ProjectNextAction(
@@ -789,7 +821,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         return {"job_id": job_id, "log": "\n".join(run.logs), "lines": run.logs}
 
     @app.get("/api/projects/{project_id}/jobs/{job_id}/artifacts/{artifact_id}")
-    def get_job_artifact(project_id: str, job_id: str, artifact_id: str) -> Response:
+    def get_job_artifact(project_id: str, job_id: str, artifact_id: str, range_header: str | None = Header(default=None, alias="Range")) -> Response:
         project = storage.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -799,6 +831,37 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
         profile = storage.get_server_profile()
         if profile is None or profile.mode != "ssh":
             raise HTTPException(status_code=409, detail="SSH server profile is required to read server artifacts")
+        artifact_for_range = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
+        if range_header is not None and artifact_for_range is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        if range_header is not None and artifact_for_range is not None and artifact_for_range.mime_type.startswith(("video/", "audio/")):
+            requested_range = parse_http_byte_range(range_header, artifact_for_range.size_bytes)
+            if requested_range is None:
+                return Response(
+                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{artifact_for_range.size_bytes}", "Accept-Ranges": "bytes"},
+                )
+            start, end = requested_range
+            content_length = end - start + 1
+            try:
+                content = ssh_server.fetch_artifact_range(profile, run, artifact_for_range, start=start, length=content_length)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Artifact not found") from None
+            except ValueError:
+                raise HTTPException(status_code=416, detail="Invalid artifact range") from None
+            content_disposition = "inline" if artifact_for_range.mime_type.startswith(("video/", "audio/")) else "attachment"
+            download_filename = Path(artifact_for_range.filename).name
+            return Response(
+                content=content,
+                media_type=artifact_for_range.mime_type,
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": f"bytes {start}-{end}/{artifact_for_range.size_bytes}",
+                    "Content-Length": str(content_length),
+                    "Content-Disposition": f'{content_disposition}; filename="{download_filename}"',
+                },
+            )
         try:
             artifact, content = ssh_server.fetch_artifact(profile, run, artifact_id)
         except FileNotFoundError:
@@ -811,6 +874,7 @@ def create_app(projects_root: Path | None = None, allow_local_mock: bool | None 
             content=content,
             media_type=artifact.mime_type,
             headers={
+                "Accept-Ranges": "bytes",
                 "Content-Disposition": f'{content_disposition}; filename="{download_filename}"',
                 "X-Artifact-SHA256": artifact.sha256,
             },
