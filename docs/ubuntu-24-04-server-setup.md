@@ -138,7 +138,7 @@ The token is required for:
 
 If `STUDIO_ADMIN_TOKEN` is missing, these endpoints fail closed with `503`.
 
-For production provider stages (`lyrics.generate`, `characters.import_or_approve`, `audio.generate_or_import`, `storyboard.generate`, `keyframes.generate`, `video.scenes.generate`, `render.full_episode`, `render.reels`, `quality.compliance_report`, and `publish.prepare_package`), uncomment `OPENAI_API_KEY` in `.env.ops` and put the real key there before starting the backend. The backend passes only the allowlisted provider variables (`OPENAI_API_KEY`, `AIKIDDO_OPENAI_TEXT_MODEL`, `AIKIDDO_OPENAI_TTS_MODEL`, `AIKIDDO_OPENAI_TTS_VOICE`, `AIKIDDO_OPENAI_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `OPENAI_API_KEY`, production provider generation fails closed and does not write a success manifest.
+For production provider stages (`lyrics.generate`, `characters.import_or_approve`, `audio.generate_or_import`, `storyboard.generate`, `keyframes.generate`, `video.scenes.generate`, `render.full_episode`, `render.reels`, `quality.compliance_report`, and `publish.prepare_package`), uncomment `OPENAI_API_KEY` in `.env.ops` and put the real key there before starting the backend. The backend passes only the allowlisted provider variables (`OPENAI_API_KEY`, `AIKIDDO_OPENAI_TEXT_MODEL`, `AIKIDDO_OPENAI_IMAGE_MODEL`, `AIKIDDO_OPENAI_IMAGE_SIZE`, `AIKIDDO_OPENAI_TTS_MODEL`, `AIKIDDO_OPENAI_TTS_VOICE`, `AIKIDDO_OPENAI_TIMEOUT_SEC`, `AIKIDDO_WORKER_MODE`) into the SSH worker command. Without `OPENAI_API_KEY`, production provider generation fails closed and does not write a success manifest.
 
 Do not set `STUDIO_ALLOW_LOCAL_MOCK` on the Ubuntu server. The default production behavior requires a saved SSH profile before any generation job can start. This prevents accidental local/mock artifacts from being treated as server-owned generation output.
 
@@ -215,7 +215,7 @@ Stack:
 - Current product modules: Series Bible, Episode Spec, Anti-Repetition v0, SSH generation queue, server artifact inventory, job history, approval history, next-action.
 - Current worker contract: scripts/aikiddo_worker.py receives job_manifest.json with upstream pipeline context and writes stage-specific output_manifest.json plus server artifacts.
 - Worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke validates deterministic end-to-end artifact threading before adding provider credentials.
-- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, keyframes.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API, and audio.generate_or_import uses OpenAI Speech API, when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
+- Current provider path: lyrics.generate, characters.import_or_approve, storyboard.generate, video.scenes.generate, render.full_episode, render.reels, quality.compliance_report, and publish.prepare_package use OpenAI Responses API; keyframes.generate also writes PNG keyframes through OpenAI Images API; audio.generate_or_import uses OpenAI Speech API when OPENAI_API_KEY is available; deterministic worker mode is dev-only.
 - Next product modules: replace the remaining lightweight worker internals with real audio/image/video generation, then Publish Package v2 and Manual Performance Ledger.
 
 Do:
@@ -224,7 +224,7 @@ Do:
 3. Run worker smoke test: python3 scripts/aikiddo_worker_smoke.py --root /tmp/aikiddo-worker-smoke
 4. Run backend tests: cd app/api && python3 -m pytest -q
 5. Run frontend checks: cd app/web && npm run lint && npm run build && npm run test:e2e
-6. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts, export AIKIDDO_OPENAI_TTS_VOICE=coral, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
+6. Create app/api/.env.ops with export STUDIO_ADMIN_TOKEN=<random-hex-token>, export AIKIDDO_OPENAI_TEXT_MODEL=gpt-5, export AIKIDDO_OPENAI_IMAGE_MODEL=gpt-image-1, export AIKIDDO_OPENAI_IMAGE_SIZE=1536x1024, export AIKIDDO_OPENAI_TTS_MODEL=gpt-4o-mini-tts, export AIKIDDO_OPENAI_TTS_VOICE=coral, and export OPENAI_API_KEY=<real-key>; do not add STUDIO_ALLOW_LOCAL_MOCK or AIKIDDO_WORKER_MODE=deterministic.
 7. Start backend on 0.0.0.0:8000 with source .env.ops and frontend on 0.0.0.0:3010.
 8. If asked to make services, create systemd units only after the app works manually.
 9. Report exact commands, ports, and any blockers.

@@ -9,6 +9,7 @@ and writes `output_manifest.json` as the stable API contract.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import math
 import os
@@ -197,6 +198,42 @@ def call_openai_speech(*, input_text: str, instructions: str) -> bytes:
         raise WorkerConfigurationError(f"OpenAI speech generation failed with HTTP {exc.code}: {body[:500]}") from exc
     except urllib.error.URLError as exc:
         raise WorkerConfigurationError(f"OpenAI speech generation failed: {exc.reason}") from exc
+
+
+def call_openai_image(*, prompt: str) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise WorkerConfigurationError("OPENAI_API_KEY is required for production image generation.")
+    model = os.getenv("AIKIDDO_OPENAI_IMAGE_MODEL", "gpt-image-1").strip() or "gpt-image-1"
+    size = os.getenv("AIKIDDO_OPENAI_IMAGE_SIZE", "1536x1024").strip() or "1536x1024"
+    timeout = int(os.getenv("AIKIDDO_OPENAI_TIMEOUT_SEC", "90"))
+    request_payload = {
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise WorkerConfigurationError(f"OpenAI image generation failed with HTTP {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise WorkerConfigurationError(f"OpenAI image generation failed: {exc.reason}") from exc
+
+    data = payload.get("data", [])
+    if not data or not isinstance(data[0], dict) or not isinstance(data[0].get("b64_json"), str):
+        raise WorkerConfigurationError("OpenAI image generation returned no b64_json image.")
+    return base64.b64decode(data[0]["b64_json"])
 
 
 def find_upstream_artifact_path(manifest: dict[str, Any], *, stage: str, artifact_id: str) -> pathlib.Path:
@@ -996,15 +1033,30 @@ def stage_files(stage: str, brief: dict[str, Any], manifest: dict[str, Any]) -> 
             ]
             keyframes_payload = {"title": title, "topic": topic, "frames": frames, "status": "ready_for_visual_review"}
             keyframe_prompts = "\n".join(frame["prompt"] for frame in frames) + "\n"
+            descriptors = [
+                ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
+                ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
+            ]
+            payloads = {
+                "keyframes.json": keyframes_payload,
+                "keyframe_prompts.txt": keyframe_prompts,
+            }
         else:
             keyframes_payload, keyframe_prompts = make_openai_keyframes_payload(manifest, brief)
-        return [
-            ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
-            ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
-        ], {
-            "keyframes.json": keyframes_payload,
-            "keyframe_prompts.txt": keyframe_prompts,
-        }
+            descriptors = [
+                ("keyframes_json", "keyframes", "keyframes.json", "application/json"),
+                ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain"),
+            ]
+            payloads = {
+                "keyframes.json": keyframes_payload,
+                "keyframe_prompts.txt": keyframe_prompts,
+            }
+            for index, frame in enumerate(keyframes_payload["frames"], start=1):
+                filename = f"keyframe_{index:02d}.png"
+                frame["image_filename"] = filename
+                descriptors.append((f"keyframe_{index:02d}_png", "keyframe_image", filename, "image/png"))
+                payloads[filename] = call_openai_image(prompt=str(frame["image_prompt"]))
+        return descriptors, payloads
 
     if stage == "video.scenes.generate":
         if worker_mode() == "deterministic":

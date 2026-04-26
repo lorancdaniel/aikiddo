@@ -610,7 +610,14 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
             ],
         }
 
+    generated_image_prompts: list[str] = []
+
+    def fake_call_openai_image(*, prompt: str) -> bytes:
+        generated_image_prompts.append(prompt)
+        return b"\x89PNG\r\n\x1a\nfake-keyframe-image"
+
     monkeypatch.setattr(worker, "call_openai_json", fake_call_openai_json)
+    monkeypatch.setattr(worker, "call_openai_image", fake_call_openai_image, raising=False)
     descriptors, payloads = worker.stage_files(
         "keyframes.generate",
         {
@@ -631,8 +638,12 @@ def test_aikiddo_worker_uses_openai_provider_for_keyframes(tmp_path: Path, monke
 
     assert ("keyframes_json", "keyframes", "keyframes.json", "application/json") in descriptors
     assert ("keyframe_prompts_txt", "keyframe_prompts", "keyframe_prompts.txt", "text/plain") in descriptors
+    assert ("keyframe_01_png", "keyframe_image", "keyframe_01.png", "image/png") in descriptors
     assert payloads["keyframes.json"]["status"] == "ready_for_visual_review"
     assert payloads["keyframes.json"]["frames"][0]["id"] == "keyframe_01"
+    assert payloads["keyframes.json"]["frames"][0]["image_filename"] == "keyframe_01.png"
+    assert payloads["keyframe_01.png"].startswith(b"\x89PNG")
+    assert len(generated_image_prompts) == 3
     assert "soft 2D keyframe of brush_friend_v1" in payloads["keyframe_prompts.txt"]
 
 
